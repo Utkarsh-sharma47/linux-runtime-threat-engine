@@ -34,6 +34,27 @@
   byte limits, asynchronous ingestion, streaming sort or load shedding are implemented.
 - Single-process/single-writer use only. No schema migrations, concurrent ingestion,
   cross-session incident restoration, retention daemon or management UI is included.
+  Within one `monitor` process, the pipeline thread is the only writer and the terminal
+  thread reads through the same lock-protected connection.
+
+## Live terminal
+
+- The dashboard is a view of the polling collector, so it inherits every polling gap
+  above. A quiet stream means nothing new was *discovered*, not that nothing happened.
+- When the bounded queue is full the collector waits instead of dropping, which delays
+  the next poll (visible as backpressure). Events are only left unprocessed after a
+  forced stop or an engine failure, and the report counts them. `kill -9` loses the
+  final summary; the session then stays `INCOMPLETE` in the history.
+- Display buffers are bounded; evicted stream entries and the oldest of the 5,000
+  buffered events for the `e` page are still in SQLite (use the `events` command).
+  Session state (processes, alerts, incidents) grows like the correlation state.
+- Collector error counts are cumulative reads over all polls, because every poll rereads
+  every process; the dashboard shows per-poll gaps instead.
+- Single-key input needs a POSIX terminal (termios). Without one, or under pipes and CI,
+  the engine uses line output and has no interactive pages.
+- Incident "ACTIVE" means the correlation window is still open, not that an attack is
+  ongoing. A derived start time uses boot time plus start ticks and is only shown for
+  processes from the current boot.
 - A storage error aborts the run. Do not catch it and continue using the same Pipeline;
   in-memory state may be ahead of its rolled-back database transaction.
 

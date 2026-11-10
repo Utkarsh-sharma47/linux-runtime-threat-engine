@@ -61,7 +61,8 @@ threat probability, attribution or success-of-attack claim is calculated.
 
 ## Persistence and reporting
 
-Tables: `events`, `alerts`, `incidents`, `incident_events`, `metric_sessions`.
+Tables: `events`, `alerts`, `incidents`, `incident_events`, `metric_sessions`,
+`monitor_sessions`.
 Foreign keys protect incident evidence relationships. Values are bound parameters.
 Events include a process-key index for retrieving observed ancestor context. Reports
 contain matched supporting events, separate context events, related process metadata,
@@ -72,6 +73,55 @@ telemetry; they do not contain a copy of the invalid input lines.
 New database files are created with mode 0600. Existing file modes are not changed.
 There is no daemon, remote server or network traffic. SQLite/report output is the
 engine's own local state, not modification of monitored processes or system policy.
+
+## Live monitoring and the terminal layer
+
+`monitor` runs three threads with one owner per mutable structure:
+
+```text
+collector thread --put--> bounded queue --get--> pipeline thread --apply--> DashboardState
+ (ProcCollector)        (capacity, blocking)     (Pipeline.process,          (lock; deep copies,
+                                                  SQLite transaction)          bounded buffers)
+                                                                                     |
+terminal (main) thread <-- snapshot()/queries ---------------------------------------+
+ (Rich Live dashboard or line output, key input, inspection pages, SQLite reads)
+```
+
+- `monitor/session.py` owns the threads and the queue. The collector blocks when the
+  queue is full (backpressure is counted) and never drops an event it has read unless
+  the session is aborted. Collection, processing and rendering loop at independent
+  rates: poll interval, queue arrival and `--refresh`.
+- `Pipeline.process` now returns a `ProcessResult` (status, rule matches marked as
+  new or deduplicated, affected incidents/alerts, created incident IDs, latency).
+  Existing callers ignore it; behaviour is unchanged.
+- `monitor/state.py` mirrors results. Alerts and incidents are deep-copied on arrival,
+  because the correlation engine keeps mutating its own objects; the terminal only
+  sees the copies. Observations, security entries (matches, incidents, errors) and
+  diagnostics are separate bounded deques, so routine process activity cannot evict a
+  finding. Evictions, render errors, drops and backpressure are counters.
+- `Database` serializes every access with a re-entrant lock and opens the connection
+  without the same-thread check, so the terminal can read evidence while the pipeline
+  writes. Writes still happen only on the pipeline thread, one transaction per event.
+- `monitor/investigation.py` provides the same read-only lookups over the live state or
+  over SQLite alone (historical `process`, `events` commands). `process/liveness.py`
+  verifies a stored identity against `/proc/PID/stat` start ticks and the boot ID before
+  calling anything `RUNNING`; otherwise data is presented as historical.
+- `terminal/` contains pure render functions (`dashboard.py`, `views/*`,
+  `session_summary.py`) that take a snapshot and a size, plus `interactions.py` (cbreak
+  key input via `select`, line prompts, page flows) and `app.py` (CLI wiring). Render
+  failures produce a fallback panel; three consecutive terminal write failures switch to
+  line output. A broken pipe silences output instead of exiting the interpreter.
+
+Shutdown (`q`, Ctrl+C, SIGTERM, SIGHUP, `--duration`) is coordinated: request stop, the
+collector finishes its current event and exits, the pipeline drains the queue, the
+dashboard shows `STOPPING`, then metrics and the session summary are persisted and the
+report is printed. A second interrupt forces the stop and the remaining queue size is
+reported as unprocessed. `shutdown()` is idempotent; no event is processed twice, so no
+incident can be created during shutdown that the pipeline would not otherwise create.
+
+Sessions are stored in `monitor_sessions` (ID, start time, JSON summary) at start with
+status `RUNNING` and replaced at the end. The summary holds counts and measurements,
+not telemetry.
 
 ## Metrics
 
