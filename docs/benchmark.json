@@ -1,0 +1,33 @@
+{
+  "environment": {
+    "python": "3.11.17",
+    "system": "Linux",
+    "kernel": "6.1.189+",
+    "architecture": "x86_64",
+    "logical_cpus": 2,
+    "sqlite": "3.53.1",
+    "pydantic": "2.14.3"
+  },
+  "dataset": {
+    "synthetic": true,
+    "records": 2000,
+    "alerting_fraction": 0.05
+  },
+  "replay_wall_seconds": 1.3569029760000149,
+  "replay_wall_events_per_second": 1473.9447369300913,
+  "sqlite_bytes": 1355776,
+  "metrics": {
+    "total_events_processed": 2000,
+    "total_alerts_generated": 100,
+    "total_incidents_created": 100,
+    "duplicate_alerts_suppressed": 0,
+    "duplicate_events_suppressed": 0,
+    "events_rejected": 0,
+    "collector_errors": 0,
+    "processing_seconds": 1.2903467480036852,
+    "maximum_processing_latency_ms": 11.198529000012059,
+    "average_processing_latency_ms": 0.6451733740018426,
+    "event_throughput_per_second": 1549.9709695043057
+  },
+  "caveat": "Single local run, not a production capacity or detection accuracy claim. Wall time includes JSONL parsing; pipeline latency excludes collector work."
+}

@@ -1,0 +1,49 @@
+Python 3.11 local validation
+All checks passed!
+39 files already formatted
+Success: no issues found in 28 source files
+........................................................................ [ 92%]
+......                                                                   [100%]
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.11.17-final-0 _______________
+
+Name                                               Stmts   Miss  Cover   Missing
+--------------------------------------------------------------------------------
+src/runtime_engine/__init__.py                         1      0   100%
+src/runtime_engine/collector/__init__.py               0      0   100%
+src/runtime_engine/collector/base.py                   6      6     0%   3-13
+src/runtime_engine/collector/proc_collector.py        75      6    92%   29, 36, 49, 61-63
+src/runtime_engine/collector/replay_collector.py      30      0   100%
+src/runtime_engine/config/__init__.py                  0      0   100%
+src/runtime_engine/config/settings.py                 15      0   100%
+src/runtime_engine/correlation/__init__.py             0      0   100%
+src/runtime_engine/correlation/engine.py              48      0   100%
+src/runtime_engine/data/__init__.py                    0      0   100%
+src/runtime_engine/detection/__init__.py               0      0   100%
+src/runtime_engine/detection/engine.py                20      0   100%
+src/runtime_engine/detection/rule_loader.py           37      0   100%
+src/runtime_engine/detection/rules.py                 18      1    94%   15
+src/runtime_engine/events/__init__.py                  0      0   100%
+src/runtime_engine/events/normalizer.py                4      0   100%
+src/runtime_engine/events/schema.py                   80      0   100%
+src/runtime_engine/incidents/__init__.py               0      0   100%
+src/runtime_engine/incidents/generator.py             15      0   100%
+src/runtime_engine/incidents/reporter.py              18      0   100%
+src/runtime_engine/main.py                           105      5    95%   77, 79, 94-95, 123
+src/runtime_engine/metrics/__init__.py                 0      0   100%
+src/runtime_engine/metrics/collector.py               21      0   100%
+src/runtime_engine/pipeline.py                        35      0   100%
+src/runtime_engine/process/__init__.py                 0      0   100%
+src/runtime_engine/process/ancestry.py                44      0   100%
+src/runtime_engine/storage/__init__.py                 0      0   100%
+src/runtime_engine/storage/database.py                60      0   100%
+--------------------------------------------------------------------------------
+TOTAL                                                632     18    97%
+Required test coverage of 90% reached. Total coverage: 97.15%
+78 passed in 1.30s
+
+Python 3.13 local validation
+........................................................................ [ 92%]
+......                                                                   [100%]
+78 passed in 0.60s
+Success: no issues found in 28 source files

@@ -1,0 +1,53 @@
+# Indicators only. Tune to your workload; no rule proves malicious intent.
+- rule_id: RT001
+  mitre_reference: https://attack.mitre.org/techniques/T1059/004/
+  name: Shell from unusual application parent
+  description: A configured application launched a Unix shell.
+  severity: HIGH
+  event_type: PROCESS_START
+  enabled: true
+  conditions:
+    - {field: process_name, op: in, value: [bash, sh, dash, zsh]}
+    - {field: parent_process_name, op: in, value: [soffice, libreoffice, nginx, apache2]}
+- rule_id: RT002
+  name: Execution from temporary location
+  description: Executable image is under an explicitly configured writable path.
+  severity: MEDIUM
+  event_type: PROCESS_START
+  enabled: true
+  conditions:
+    - {field: executable_path, op: path_under, value: [/tmp, /var/tmp, /dev/shm]}
+- rule_id: RT003
+  name: Sensitive file access
+  description: Telemetry reports access to a configured sensitive file, not its contents.
+  severity: HIGH
+  event_type: FILE_ACCESS
+  enabled: true
+  conditions:
+    - {field: file_path, op: in, value: [/etc/shadow, /etc/gshadow]}
+- rule_id: RT004
+  name: Transition to root from non-root
+  description: Both previous and current UID must be present. Legitimate sudo may match.
+  severity: HIGH
+  event_type: PRIVILEGE_CHANGE
+  enabled: true
+  conditions:
+    - {field: previous_uid, op: not_in, value: [0]}
+    - {field: uid, op: equals, value: 0}
+- rule_id: RT005
+  name: Transfer utility launched by a shell
+  description: A configured shell launched a transfer utility. Context is required for triage.
+  severity: LOW
+  event_type: PROCESS_START
+  enabled: true
+  conditions:
+    - {field: parent_process_name, op: in, value: [bash, sh, dash, zsh]}
+    - {field: process_name, op: in, value: [curl, wget]}
+- rule_id: RT006
+  name: Connection to configured watch destination
+  description: Documentation-only example watch destination; replace with an approved watchlist.
+  severity: MEDIUM
+  event_type: NETWORK_CONNECTION
+  enabled: true
+  conditions:
+    - {field: network_destination, op: in, value: [203.0.113.10]}

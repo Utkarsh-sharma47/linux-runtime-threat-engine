@@ -1,0 +1,1 @@
+{"event_id": "synthetic-shell-1", "event_type": "PROCESS_START", "host_id": "synthetic-shell", "metadata": {"scenario": "shell", "synthetic": true}, "parent_process_name": "soffice", "pid": 100, "process_name": "bash", "process_start_time": "1000", "source": "synthetic", "timestamp": "2026-01-01T00:00:01+00:00"}

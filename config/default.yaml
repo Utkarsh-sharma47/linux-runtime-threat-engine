@@ -1,0 +1,4 @@
+database: runtime.db
+correlation_window_seconds: 120
+poll_interval_seconds: 2
+include_cmdline: false
