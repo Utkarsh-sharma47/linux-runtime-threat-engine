@@ -51,17 +51,50 @@ available to the rules. Components remain independently testable.
 
 ## Install
 
-On Linux with Python 3.11 or later:
+You need Python 3.11 or newer. Live monitoring additionally requires Linux -
+the collector reads `/proc`. Replay, demonstrations, reports and tests run
+wherever Python 3.11 runs; the project is developed and CI-tested on Linux, so
+treat other operating systems as replay-only and unverified.
+
+### Ubuntu
+
+Ubuntu 24.04 LTS ships `python3` 3.12, and newer releases ship 3.13 or 3.14
+(per the Ubuntu package index), so the distribution packages are enough:
 
 ```bash
-python3.11 -m venv .venv
+sudo apt update
+sudo apt install -y python3 python3-venv
+python3 --version   # must print 3.11 or newer
+```
+
+On Ubuntu 22.04 LTS the default `python3` is 3.10 - too old - and the standard
+repositories carry no newer Python. On 22.04, skip apt and use the uv route
+below; it installs its own Python 3.11.
+
+Then, from the repository root:
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-Alternatively, with [uv](https://docs.astral.sh/uv/), `uv sync --extra dev --locked`
-uses the committed dependency lock. Production dependencies are just Pydantic and
-PyYAML; argparse, logging and SQLite come from Python. No root access is needed.
+The install also registers a `runtime-engine` command equivalent to
+`python -m runtime_engine.main`.
+
+The [uv](https://docs.astral.sh/uv/) route installs a suitable Python and the
+locked dependencies in one step, on any release including 22.04:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv python install 3.11
+uv sync --extra dev --locked
+```
+
+Then either `source .venv/bin/activate` or prefix every command with `uv run`.
+
+Production dependencies are just Pydantic and PyYAML; argparse, logging and
+SQLite come from Python. No root access is needed to install or run.
 
 ## Quick start
 
@@ -87,6 +120,12 @@ python -m runtime_engine.main --db monitor.db monitor --duration 10
 # Omit --duration to continue until Ctrl-C. Default poll interval is 2 seconds.
 # Only if needed and authorized: monitor --include-cmdline
 ```
+
+One Ctrl-C stops the monitor cleanly: it finishes the current poll, writes its
+final session summary and exits. SQLite writes are atomic, so an interrupted run
+still leaves a consistent database. Processes the collector cannot read (other
+users' processes under `hidepid`, or a restricted container) are skipped and
+counted as collector errors; they are never fatal.
 
 The first snapshot reports all visible processes as newly observed, not as proof
 that they just started. The engine writes only its own SQLite/report outputs.
