@@ -59,6 +59,7 @@ def test_live_proc_monitor_read_only(tmp_path):
             "monitor",
             "--duration",
             "0.1",
+            "--json",
         ],
         capture_output=True,
         text=True,
