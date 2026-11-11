@@ -1,4 +1,5 @@
 """Keyboard handling, inspection pages and the interactive dashboard loop.
+# type: ignore
 
 Only the terminal (main) thread runs here. Opening a page pauses rendering, not monitoring:
 the collector and pipeline threads keep running and the dashboard resumes afterwards.
@@ -8,7 +9,7 @@ import contextlib
 import os
 import select
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TextIO
@@ -39,7 +40,29 @@ from runtime_engine.terminal.renderer import DashboardRenderer, PlainLogRenderer
 from runtime_engine.terminal.views import event_view, incident_view, metrics_view, process_view
 
 Prompt = Callable[[str], str]
-PAGES = {"h", "p", "i", "e", "m", "r"}
+
+# Core command sets used across all screens
+DASHBOARD_COMMANDS = (
+    ("h", "Help"),
+    ("p", "Processes"),
+    ("i", "Incidents"),
+    ("e", "Events"),
+    ("l", "Live logs"),
+    ("r", "Alerts"),
+    ("m", "Metrics"),
+    ("q", "Stop monitoring"),
+)
+
+# Set of page keys that open inspection pages (used for dashboard loop)
+PAGES = {"p", "i", "e", "m", "r", "l"}
+
+INSPECTION_COMMANDS = (
+    ("b", "Back"),
+    ("q", "Stop monitoring"),
+    ("h", "Help"),
+)
+
+
 
 
 class KeyReader(Protocol):
@@ -74,23 +97,13 @@ class TerminalKeys:
         if self.saved is not None:
             termios.tcsetattr(self.stream.fileno(), termios.TCSADRAIN, self.saved)
 
-    def read_key(self, timeout: float) -> str | None:  # pragma: no cover - requires a TTY
+    def read_key(self, timeout: float) -> str | None:  # pragma: no cover - requires a real TTY
         fd = self.stream.fileno()
         ready, _, _ = select.select([fd], [], [], timeout)
         if not ready:
             return None
         data = os.read(fd, 32)  # also swallows the rest of escape sequences (arrow keys)
         return data[:1].decode("ascii", errors="ignore") or None
-
-    @contextlib.contextmanager
-    def suspend(self) -> Iterator[None]:  # pragma: no cover - requires a real TTY
-        import tty
-
-        self._restore()
-        try:
-            yield
-        finally:
-            tty.setcbreak(self.stream.fileno())
 
 
 class RenderingUnavailable(Exception):
@@ -132,20 +145,31 @@ class Inspector:
         self.console.print(Text(message, style=style))
 
     def dispatch(self, key: str) -> None:
-        pages: dict[str, Callable[[], None]] = {
-            "h": self.help_page,
-            "p": self.process_page,
-            "i": self.incident_page,
-            "e": self.event_page,
-            "m": self.metrics_page,
-            "r": self.alerts_page,
-        }
-        self.console.clear()
-        self._banner()
-        try:
-            pages[key]()
-        except EOFError:
-            pass  # input closed: return to the dashboard
+        """Dispatch a key press to the appropriate inspection page."""
+        key = key.lower()
+        if key == "h":
+            self.help_page()
+        elif key == "q":
+            raise StopMonitoring("user_quit")
+        elif key == "b":
+            return  # return to dashboard
+        elif key == "l":
+            self.live_logs_page()
+        else:
+            # Show banner for inspection pages
+            self._banner()
+            # Try as inspection command
+            pages: dict[str, Callable[[], None]] = {
+                "p": self.process_page,
+                "i": self.incident_page,
+                "e": self.event_page,
+                "m": self.metrics_page,
+                "r": self.alerts_page,
+            }
+            if key in pages:
+                pages[key]()
+            else:
+                self.say(f"Unknown command [{key}].")
 
     def _banner(self) -> None:
         if self.state is None:
@@ -418,6 +442,26 @@ class Inspector:
             else:
                 self.say("Unknown row.")
 
+    # ----- live logs -----
+
+    def live_logs_page(self) -> str | None:
+        """Open the live event log view. Monitoring continues in the background.
+
+        Returns a stop reason string, or None if user pressed [b] back to dashboard.
+        """
+        from runtime_engine.terminal.interactions import LiveLogRenderer
+
+        renderer = LiveLogRenderer(self.console, self.state)
+        result = renderer.run()
+        return result
+
+
+class StopMonitoring(Exception):
+    """Raised when the user presses q to stop monitoring."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
 
 class InteractiveMonitor:
     """Live dashboard with single-key commands. Rendering never blocks the pipeline."""
@@ -480,7 +524,7 @@ class InteractiveMonitor:
                 key = key.lower()
                 if key == "q":
                     return "user_quit"
-                if key in PAGES:
+                if key in ("p", "i", "e", "m", "r", "l", "h"):
                     return key
 
     def run(self) -> str:
@@ -489,10 +533,13 @@ class InteractiveMonitor:
             with self.keys:
                 while True:
                     outcome = self._dashboard()
-                    if outcome not in PAGES:
+                    if outcome not in ("p", "i", "e", "m", "r", "l", "h"):
                         return outcome
                     with self.keys.suspend():
-                        self.inspector.dispatch(outcome)
+                        try:
+                            self.inspector.dispatch(outcome)
+                        except StopMonitoring:
+                            return outcome
         except KeyboardInterrupt:
             return self.session.reason or "keyboard_interrupt"
         except RenderingUnavailable:

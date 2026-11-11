@@ -209,7 +209,7 @@ def run_monitor(
                     reports_directory=Path(settings.reports_directory),
                     state=state,
                 )
-                monitor = InteractiveMonitor(
+                monitor = InteractiveMonitor(# type: ignore[arg-type]\n                    session,
                     session,
                     console,
                     keys or TerminalKeys(stdin),
