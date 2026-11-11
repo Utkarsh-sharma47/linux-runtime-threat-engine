@@ -24,6 +24,9 @@ class ProcCollector:
         self.seen: set[str] = set()
         self.errors = 0
         self.rejected = 0
+        # Subsets of `errors`: optional fields left unknown, and whole entries skipped.
+        self.missing_telemetry = 0
+        self.read_failures = 0
         self.host_id = (root / "sys/kernel/random/boot_id").read_text().strip()
         if not self.host_id:
             raise ValueError("a boot ID is required for safe process identity")
@@ -49,6 +52,7 @@ class ProcCollector:
             pass  # kernel threads and racing exits may lack exe
         except PermissionError:
             self.errors += 1
+            self.missing_telemetry += 1
             logger.debug("proc_exe_denied pid=%d", pid)
         cmdline = None
         if self.include_cmdline:
@@ -60,6 +64,7 @@ class ProcCollector:
                 ]
             except (PermissionError, FileNotFoundError):
                 self.errors += 1
+                self.missing_telemetry += 1
                 logger.debug("proc_cmdline_unavailable pid=%d", pid)
         # Recheck start ticks after reading other fields to avoid mixing a reused PID.
         check = (folder / "stat").read_text()
@@ -93,6 +98,7 @@ class ProcCollector:
                 snapshot[event.pid] = event
             except (OSError, ValueError, IndexError) as exc:
                 self.errors += 1
+                self.read_failures += 1
                 logger.debug(
                     "proc_read_failed pid=%s error_type=%s", folder.name, type(exc).__name__
                 )

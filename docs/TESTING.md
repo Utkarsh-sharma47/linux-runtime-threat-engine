@@ -29,6 +29,19 @@ python scripts/benchmark.py --events 2000
   resources and a real read-only `/proc` monitor smoke test on Linux.
 - Packaging: wheel installation into a fresh environment and execution from outside
   the source checkout, so the bundled YAML must actually ship in the wheel.
+- Live terminal (`tests/terminal/`, no real terminal or suspicious activity required):
+  dashboard initialization and refresh, event/severity formatting, no-colour output,
+  long command-line truncation vs. full detail, control-character escaping, empty
+  stream/incident states, rendering at 20x6 up to 300x100 for every verbosity, renderer
+  failure and fallback to line output, broken pipes, metrics/alerts/help pages, process
+  inspection (live and historical with a reused PID against a fake `/proc`), incident
+  inspection and non-overwriting 0600 export, event filters, `q`, Ctrl+C on the
+  dashboard and inside a page, a second interrupt during shutdown, non-interactive
+  fallback, `--json`, queue overflow with backpressure and no drops, drops only after an
+  abort, concurrent snapshots during updates, collector and storage failures, no event
+  loss and no duplicate incidents on shutdown, session persistence/history commands,
+  final summary values against pipeline metrics, and real `/proc` subprocess runs
+  stopped by `--duration`, SIGTERM and SIGINT.
 
 See `validation.txt` for captured local outputs. The measured result is 78 tests passed
 on Python 3.11.17 and separately 78 on 3.13.17. The Python 3.11 coverage run measured
@@ -36,6 +49,10 @@ on Python 3.11.17 and separately 78 on 3.13.17. The Python 3.11 coverage run mea
 passed. The wheel and source distribution built, and the wheel's installed CLI
 loaded the bundled rules outside the checkout. These are local results, not a hosted
 GitHub Actions claim. The configured CI runs on ubuntu-24.04 for Python 3.11 and 3.13.
+With the live terminal interface the local suite is 142 tests on Python 3.12.3 with
+96.07% statement coverage; Python 3.11/3.13 were not re-run locally for this change.
+The interactive dashboard was additionally exercised manually through a pseudo-terminal
+against the real `/proc` collector (key commands, pages, resize, `q` and Ctrl+C).
 
 ## Reproduce a complete demo
 

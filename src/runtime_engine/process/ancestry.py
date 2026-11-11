@@ -1,6 +1,16 @@
 """Start-time-qualified process graphs; PID alone never establishes a relationship."""
 
+import json
+
 from runtime_engine.events.schema import Event, EventType
+
+
+def parent_key(event: Event) -> str | None:
+    """The parent's identity key, only when the source reported the parent's start token."""
+    if not event.ppid or not event.parent_start_time:
+        return None
+    key = json.dumps([event.host_id, event.ppid, event.parent_start_time], separators=(",", ":"))
+    return None if key == event.process_key else key
 
 
 class AncestryTracker:
@@ -17,14 +27,9 @@ class AncestryTracker:
         existing = self.nodes.get(key)
         if existing is None or event.event_type == EventType.PROCESS_START:
             self.nodes[key] = event
-        if event.ppid and event.parent_start_time:
-            import json
-
-            parent_key = json.dumps(
-                [event.host_id, event.ppid, event.parent_start_time], separators=(",", ":")
-            )
-            if parent_key != key:
-                self.parents[key] = parent_key
+        parent = parent_key(event)
+        if parent is not None:
+            self.parents[key] = parent
         if event.event_type == EventType.PROCESS_EXIT:
             self.terminated.add(key)
 
