@@ -239,6 +239,13 @@ prerequisites or cleanup, and validates telemetry and attribution end to end. Th
 T1036.003 #2 (with `-AllowReviewRequired`) is the first test that the current rules can
 actually detect.
 
+**Verified run (2026-11-13, T1059.004 #8, operator-approved).** The test completed with
+exit code 0. The engine (2 s polling) stored the executor `sh` (its PID matched the
+module's execution log) and 2 of the 5 one-second `sleep` children, all attributed through
+the runner identity chain; 4 concurrent unrelated events were excluded. No rule matched,
+so the report graded it **NOT DETECTED (rule coverage gap)**, as predicted. Cleanup was
+not required and verification passed. T1033 #2 and T1036.003 #2 have not been executed.
+
 ## 14. Troubleshooting
 
 | Symptom | Cause and fix |
@@ -249,6 +256,7 @@ actually detect.
 | `PathToAtomicsFolder` errors | atomics not at `~/AtomicRedTeam/atomics`; pass `-AtomicsPath` / `-PathToAtomicsFolder` |
 | `REFUSED: the engine is not monitoring` | start `monitor` with the same `--db`; a `kill -9`'d session stays `RUNNING` in the DB but is detected as dead by PID and command line |
 | `REFUSED: stdin is not interactive` | approvals cannot be scripted; run the runner in a terminal |
+| Run hangs after `PathToAtomicsFolder =` when driven through a pseudo-terminal | `Invoke-AtomicTest` progress bars stall on terminals without a size; the runner sets `$ProgressPreference = 'SilentlyContinue'`, do the same in your own sessions |
 | Report `INCONCLUSIVE`, no attributed process | the processes exited between polls; use a longer-lived test or a shorter `poll_interval_seconds` |
 | `database is locked` | the engine was committing; reports retry for 10 s, rerun the `report` command |
 | Leftover `/tmp` files after cleanup | read `cleanup-verification.txt`; remove only files you can attribute to the test |

@@ -36,6 +36,8 @@ param(
 
 # No Set-StrictMode: the official module's config.ps1 reads unset variables at import.
 $ErrorActionPreference = 'Stop'
+# Invoke-AtomicTest's progress bars stall on terminals without a size and clutter the logs.
+$ProgressPreference = 'SilentlyContinue'
 
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Python = Join-Path $Repo '.venv/bin/python'
