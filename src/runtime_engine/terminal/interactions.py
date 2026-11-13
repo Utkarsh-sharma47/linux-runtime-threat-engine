@@ -9,6 +9,7 @@ import contextlib
 import os
 import select
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,7 +21,7 @@ from rich.table import Table
 from rich.text import Text
 
 from runtime_engine.detection.rule_loader import Rule
-from runtime_engine.events.schema import Event
+from runtime_engine.events.schema import Event, Severity
 from runtime_engine.incidents.reporter import export_json
 from runtime_engine.monitor.investigation import (
     EventFilter,
@@ -34,11 +35,19 @@ from runtime_engine.monitor.investigation import (
 from runtime_engine.monitor.session import MonitorSession
 from runtime_engine.monitor.state import DashboardState, EventRecord
 from runtime_engine.process.liveness import Liveness, check, start_time
+from runtime_engine.security.findings import MODULES, Finding, ScanReport
 from runtime_engine.storage.database import Database
 from runtime_engine.terminal.formatting import clean, severity_text
 from runtime_engine.terminal.live_logs import LiveLogRenderer
 from runtime_engine.terminal.renderer import DashboardRenderer, PlainLogRenderer
-from runtime_engine.terminal.views import event_view, incident_view, metrics_view, process_view
+from runtime_engine.terminal.views import (
+    event_view,
+    incident_view,
+    metrics_view,
+    process_view,
+    security_view,
+)
+from runtime_engine.terminal.views.security_common import finding_detail
 
 Prompt = Callable[[str], str]
 
@@ -52,11 +61,12 @@ DASHBOARD_COMMANDS = (
     ("r", "Alerts"),
     ("m", "Metrics"),
     ("t", "Process tree"),
+    ("s", "Security modules"),
     ("q", "Stop monitoring"),
 )
 
 # Set of page keys that open inspection pages (used for dashboard loop)
-PAGES = {"p", "i", "e", "m", "r", "l", "t"}
+PAGES = {"p", "i", "e", "m", "r", "l", "t", "s"}
 
 INSPECTION_COMMANDS = (
     ("b", "Back"),
@@ -165,6 +175,8 @@ class Inspector:
             return  # return to dashboard
         elif key == "t":
             self.process_tree_page()
+        elif key == "s":
+            self.security_page()
         else:
             # Show banner for inspection pages
             self._banner()
@@ -487,6 +499,104 @@ class Inspector:
                 self.console.print(event_view.render_event_details(record, alerts))
             else:
                 self.say("Unknown row.")
+
+    # ----- security modules -----
+
+    def _security_overview(self) -> dict[str, dict[str, Any]]:
+        if self.state is not None:
+            return self.state.security.overview()
+        overview: dict[str, dict[str, Any]] = {}
+        for module in MODULES:  # historical: last stored scan and findings per module
+            body = self.database.baseline(module, "last-scan")
+            findings = self._security_findings(module)
+            overview[module] = {
+                "enabled": "enabled" if body else "no stored scan",
+                "status": body.get("status") if body else None,
+                "last_scan": body.get("started_at") if body else None,
+                "scans": 1 if body else 0,
+                "findings": len(findings),
+                "promoted": sum(1 for f in findings if f.promoted),
+                "by_severity": dict(Counter(f.severity.value for f in findings)),
+            }
+        return overview
+
+    def _security_findings(self, module: str) -> list[Finding]:
+        if self.state is not None:
+            return self.state.security.recent(module)
+        fields = Finding.model_fields
+        return [
+            Finding.model_validate({k: v for k, v in row.items() if k in fields})
+            for row in self.database.findings(module)
+        ]
+
+    def show_finding(self, finding: Finding) -> None:
+        # The stored row adds first/last seen and occurrences across scans.
+        self.console.print(finding_detail(self.database.finding(finding.finding_id) or finding))
+
+    def _security_report(self, module: str) -> ScanReport | None:
+        if self.state is not None:
+            return self.state.security.report(module)
+        body = self.database.baseline(module, "last-scan")
+        return ScanReport.from_dict(body) if body else None
+
+    def security_page(self) -> None:
+        """Menu of the six security modules; cached results only, never triggers a scan."""
+        while True:
+            self.console.print(security_view.render_security_menu(self._security_overview()))
+            answer = self.ask("Module # or name, or a finding ID (blank to return): ")
+            if not answer or answer.lower() in ("b", "q"):
+                return
+            module = security_view.resolve_module(answer)
+            if module is not None:
+                self.security_module_page(module)
+                continue
+            everything = [f for m in MODULES for f in self._security_findings(m)]
+            finding = security_view.find_finding(everything, answer)
+            if finding is None:
+                self.say(f"No module or finding matches {clean(answer)!r}.")
+            else:
+                self.show_finding(finding)
+
+    def security_module_page(self, module: str) -> None:
+        minimum: Severity | None = None
+        rule: str | None = None
+        while True:
+            findings = self._security_findings(module)
+            self.console.print(
+                security_view.render_module_page(
+                    module,
+                    self._security_overview().get(module, {}),
+                    self._security_report(module),
+                    findings,
+                    minimum=minimum,
+                    rule=rule,
+                )
+            )
+            answer = self.ask(
+                "Finding ID for details, 'sev LEVEL' or 'rule ID' to filter, 'c' to clear, "
+                "Enter to refresh, 'b' to go back: "
+            )
+            words = answer.split()
+            if answer.lower() in ("b", "q"):
+                return
+            if not words:
+                continue
+            if answer.lower() == "c":
+                minimum = rule = None
+            elif words[0].lower() in ("sev", "severity") and len(words) == 2:
+                try:
+                    minimum = Severity(words[1].upper())
+                except ValueError:
+                    self.say("Severity must be LOW, MEDIUM, HIGH or CRITICAL.")
+            elif words[0].lower() == "rule" and len(words) == 2:
+                rule = words[1].upper()
+            else:
+                finding = security_view.find_finding(findings, answer)
+                if finding is None:
+                    self.say(f"No {module} finding matches {clean(answer)!r}.")
+                    continue
+                self.show_finding(finding)
+                self.ask("Press Enter to return to the module page ")
 
     # ----- live logs -----
 
