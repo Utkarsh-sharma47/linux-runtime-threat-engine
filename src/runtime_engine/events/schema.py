@@ -14,6 +14,8 @@ class EventType(StrEnum):
     FILE_ACCESS = "FILE_ACCESS"
     PRIVILEGE_CHANGE = "PRIVILEGE_CHANGE"
     NETWORK_CONNECTION = "NETWORK_CONNECTION"
+    # A security module finding promoted into correlation (see runtime_engine.security).
+    SECURITY_FINDING = "SECURITY_FINDING"
 
 
 class Severity(StrEnum):
