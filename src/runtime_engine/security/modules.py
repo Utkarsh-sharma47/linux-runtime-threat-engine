@@ -7,6 +7,7 @@ from runtime_engine.security.findings import SecurityState, SeverityPolicy
 from runtime_engine.security.integrity import IntegrityMonitor
 from runtime_engine.security.network import NetworkMonitor
 from runtime_engine.security.persistence import PersistenceMonitor, entries_from_body
+from runtime_engine.security.ransomware import RansomwareMonitor
 from runtime_engine.security.scheduler import SecurityModule
 from runtime_engine.storage.database import Database
 
@@ -76,4 +77,13 @@ def build_modules(
         )
     else:
         off["exposure"] = "disabled in configuration"
+    ransomware = settings.security.ransomware
+    if ransomware.enabled and ransomware.directories:
+        modules.append(RansomwareMonitor(ransomware, policy(settings, ransomware)))
+    else:
+        off["ransomware"] = (
+            "no directories configured (security.ransomware.directories)"
+            if ransomware.enabled
+            else "disabled in configuration"
+        )
     return modules, off

@@ -218,6 +218,22 @@ def parser() -> argparse.ArgumentParser:
     exposure.add_argument("--rule", help="Only one rule, e.g. EX001")
     exposure.add_argument("--id", dest="finding_id", help="Finding to show")
     exposure.add_argument("--json", action="store_true")
+    ransomware = sub.add_parser(
+        "ransomware",
+        help="Ransomware early warning: demo, simulate, watch, report, cleanup",
+        description="Behavioural detection (modification and rename rates, affected files, "
+        "entropy rises, extension changes) on explicitly chosen directories. demo and "
+        "simulate only touch files they create in a dedicated lab under the system temp "
+        "directory; no real encryption or user data is involved.",
+    )
+    ransomware.add_argument("action", choices=["demo", "simulate", "watch", "report", "cleanup"])
+    ransomware.add_argument("--lab-dir", help="Lab directory (must be <tmp>/rte-ransomware-lab*)")
+    ransomware.add_argument("--dir", dest="directory", help="Directory to watch (watch)")
+    ransomware.add_argument("--files", type=int, default=30)
+    ransomware.add_argument("--delay", type=float, default=0.03)
+    ransomware.add_argument("--duration", type=positive, default=30)
+    ransomware.add_argument("--keep", action="store_true", help="Keep the demo lab files")
+    ransomware.add_argument("--json", action="store_true")
     return result
 
 
@@ -331,6 +347,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 severity=args.severity,
                 rule=args.rule,
                 finding_id=args.finding_id,
+            )
+        if args.command == "ransomware":
+            return security_app.ransomware_command(
+                database,
+                settings,
+                rules,
+                console,
+                args.action,
+                as_json=args.json,
+                lab_dir=args.lab_dir,
+                directory=args.directory,
+                files=args.files,
+                delay=args.delay,
+                duration=args.duration,
+                keep=args.keep,
             )
         if args.command == "incidents":
             print(
