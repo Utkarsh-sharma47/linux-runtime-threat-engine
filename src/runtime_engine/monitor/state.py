@@ -23,6 +23,7 @@ from runtime_engine.events.schema import Alert, Event, EventType, Incident, Seve
 from runtime_engine.monitor.notifications import Notification, NotificationCenter
 from runtime_engine.pipeline import ProcessResult
 from runtime_engine.process.ancestry import parent_key
+from runtime_engine.security.findings import SecurityState
 
 
 class Verbosity(IntEnum):
@@ -253,6 +254,7 @@ class DashboardState:
         self.latest_event_time: datetime | None = None
         self.exported_reports: list[str] = []
         self.notifications = notifications or NotificationCenter()
+        self.security = SecurityState()
         self.evicted_marks: dict[Verbosity, int] = {}  # newest evicted seq per verbosity
         self._seq = 0
 

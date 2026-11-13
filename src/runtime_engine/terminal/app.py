@@ -35,6 +35,8 @@ from runtime_engine.monitor.investigation import (
 from runtime_engine.monitor.session import MonitorSession, SnapshotCollector
 from runtime_engine.monitor.state import DashboardState, SessionInfo, StateLogHandler, Verbosity
 from runtime_engine.pipeline import Pipeline
+from runtime_engine.security.modules import build_modules
+from runtime_engine.security.scheduler import SecurityModule
 from runtime_engine.storage.database import Database
 from runtime_engine.terminal.interactions import (
     Inspector,
@@ -68,6 +70,7 @@ class MonitorOptions:
     dashboard: bool | None = None  # None: automatic (both stdin and stdout are terminals)
     json_output: bool = False
     queue_capacity: int = 10000
+    security_modules: bool = False  # the CLI enables the scheduled security modules
 
 
 def new_session_id(now: datetime) -> str:
@@ -183,6 +186,11 @@ def run_monitor(
     )
     state = DashboardState(info)
     pipeline = Pipeline(database, rules, settings.correlation_window_seconds)
+    modules: list[SecurityModule] = []
+    if options.security_modules:
+        modules, off = build_modules(settings, database)
+        for name, reason in off.items():
+            state.security.set_enabled(name, reason)
     session = MonitorSession(
         pipeline,
         collector,
@@ -190,6 +198,7 @@ def run_monitor(
         poll_interval=poll,
         queue_capacity=options.queue_capacity,
         duration=options.duration,
+        security_modules=modules,
     )
     # Line output goes to stderr with --json so stdout stays machine-readable.
     console = console or cli_console(sys.stderr if options.json_output else stdout)

@@ -17,7 +17,7 @@ from runtime_engine.incidents.generator import generate
 from runtime_engine.incidents.reporter import export_json, terminal
 from runtime_engine.monitor.state import Verbosity
 from runtime_engine.storage.database import Database
-from runtime_engine.terminal import app
+from runtime_engine.terminal import app, security_app
 
 MONITOR_EPILOG = """\
 interactive commands (dashboard mode):
@@ -29,6 +29,7 @@ The dashboard needs an interactive terminal on stdin and stdout. Otherwise, or w
 and the session is saved; list saved sessions with the `sessions` command.
 """
 NOT_FOUND = {
+    "persistence": "error: finding not found",
     "process": "error: no stored process with that PID",
     "session": "error: session not found",
 }
@@ -87,6 +88,11 @@ def parser() -> argparse.ArgumentParser:
     monitor.add_argument(
         "--queue-capacity", type=int, help="Bounded collector-to-pipeline queue size"
     )
+    monitor.add_argument(
+        "--no-security-modules",
+        action="store_true",
+        help="Do not run the scheduled security modules (persistence, ...)",
+    )
     sub.add_parser("incidents", help="List persisted incidents")
     show = sub.add_parser("incident", help="Show one incident with evidence")
     show.add_argument("--id", required=True)
@@ -115,6 +121,16 @@ def parser() -> argparse.ArgumentParser:
     session = sub.add_parser("session", help="Show one recorded session report")
     session.add_argument("--id", required=True)
     session.add_argument("--json", action="store_true")
+    persistence = sub.add_parser(
+        "persistence",
+        help="Persistence and privilege monitoring: baseline, scan, show",
+        description="Read-only comparison of systemd units, cron, SSH authorized_keys, "
+        "sudoers, SUID/SGID executables, file capabilities and sensitive executable "
+        "directories against a stored baseline.",
+    )
+    persistence.add_argument("action", choices=["baseline", "scan", "show"])
+    persistence.add_argument("--id", dest="finding_id", help="Show one finding (with show)")
+    persistence.add_argument("--json", action="store_true")
     return result
 
 
@@ -156,8 +172,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dashboard=False if args.no_dashboard else None,
                 json_output=args.json,
                 queue_capacity=args.queue_capacity or settings.event_queue_capacity,
+                security_modules=not args.no_security_modules,
             )
             return app.run_monitor(database, rules, settings, options)
+        if args.command == "persistence":
+            return security_app.persistence_command(
+                database,
+                settings,
+                rules,
+                console,
+                args.action,
+                as_json=args.json,
+                finding_id=args.finding_id,
+            )
         if args.command == "incidents":
             print(
                 json.dumps(

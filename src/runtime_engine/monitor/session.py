@@ -20,6 +20,8 @@ from typing import Protocol
 from runtime_engine.events.schema import Event
 from runtime_engine.monitor.state import DashboardState
 from runtime_engine.pipeline import Pipeline
+from runtime_engine.security.findings import Finding
+from runtime_engine.security.scheduler import SecurityModule, SecurityScheduler
 
 
 class SnapshotCollector(Protocol):
@@ -48,6 +50,7 @@ class MonitorSession:
         duration: float | None = None,
         put_timeout: float = 0.25,
         clock: Callable[[], float] = time.monotonic,
+        security_modules: "list[SecurityModule] | None" = None,
     ) -> None:
         if queue_capacity < 1:
             raise ValueError("queue capacity must be positive")
@@ -58,11 +61,23 @@ class MonitorSession:
         self.duration = duration
         self.put_timeout = put_timeout
         self.clock = clock
-        self.events: queue.Queue[tuple[bool, Event]] = queue.Queue(maxsize=queue_capacity)
+        # One bounded queue for collector events and security-module findings.
+        self.events: queue.Queue[tuple[bool, Event | Finding]] = queue.Queue(maxsize=queue_capacity)
         self.stop_requested = threading.Event()
         self.abort = threading.Event()
         self.collector_done = threading.Event()
         self.processor_done = threading.Event()
+        self.security_done = threading.Event()
+        self.scheduler = (
+            SecurityScheduler(
+                security_modules, self.submit_finding, state.security, self.stop_requested
+            )
+            if security_modules
+            else None
+        )
+        if self.scheduler is None:
+            self.security_done.set()
+        self.abandoned_scans: list[str] = []
         self.reason: str | None = None
         self.failure: str | None = None
         self.forced = False
@@ -92,6 +107,8 @@ class MonitorSession:
         )
         self._processor_thread.start()
         self._collector_thread.start()
+        if self.scheduler is not None:
+            self.scheduler.start()
 
     def request_stop(self, reason: str) -> None:
         with self._reason_lock:
@@ -118,9 +135,17 @@ class MonitorSession:
             self.collector.rejected,
         )
 
+    def submit_finding(self, finding: Finding) -> bool:
+        """Called from module threads. Rejected once a stop was requested."""
+        if self.stop_requested.is_set():
+            return False
+        return self._put((False, finding), event=False)
+
     def _enqueue(self, baseline: bool, event: Event) -> bool:
+        return self._put((baseline, event))
+
+    def _put(self, item: tuple[bool, Event | Finding], *, event: bool = True) -> bool:
         """Block while the queue is full (counted once per wait); drop only on abort."""
-        item = (baseline, event)
         try:
             self.events.put_nowait(item)
         except queue.Full:
@@ -134,7 +159,10 @@ class MonitorSession:
                     break
                 except queue.Full:
                     continue
-        self.state.record_accepted(self.events.qsize())
+        if event:
+            self.state.record_accepted(self.events.qsize())
+        else:
+            self.state.record_queue_depth(self.events.qsize())
         return True
 
     def _collect(self) -> None:
@@ -178,13 +206,22 @@ class MonitorSession:
         try:
             while not self.abort.is_set():
                 try:
-                    baseline, event = self.events.get(timeout=0.1)
+                    baseline, item = self.events.get(timeout=0.1)
                 except queue.Empty:
-                    if self.collector_done.is_set() and self.events.empty():
+                    if (
+                        self.collector_done.is_set()
+                        and self.security_done.is_set()
+                        and self.events.empty()
+                    ):
                         break
                     continue
-                result = self.pipeline.process(event)
-                self.state.apply(result, baseline)
+                if isinstance(item, Finding):
+                    promoted = self.pipeline.process_finding(item)
+                    self.state.security.record_finding(item)
+                    if promoted is not None:
+                        self.state.apply(promoted)
+                else:
+                    self.state.apply(self.pipeline.process(item), baseline)
                 self.state.record_queue_depth(self.events.qsize())
         except Exception as exc:
             # Storage errors abort the run: in-memory state may be ahead of the database.
@@ -222,6 +259,10 @@ class MonitorSession:
         if self._collector_thread.ident is None:
             self.collector_done.set()
         self._join(self._collector_thread)
+        if self.scheduler is not None:
+            # Running scans finish or are abandoned; their findings are no longer accepted.
+            self.abandoned_scans = self.scheduler.join(timeout=5.0)
+        self.security_done.set()
         self._join(self._processor_thread)
         self._sync_collector()
         unprocessed = self.events.qsize()

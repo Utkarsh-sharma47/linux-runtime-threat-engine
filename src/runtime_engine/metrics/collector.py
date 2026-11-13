@@ -14,6 +14,8 @@ class Metrics:
     collector_errors: int = 0
     processing_seconds: float = 0
     maximum_processing_latency_ms: float = 0
+    security_findings_received: int = 0
+    security_findings_promoted: int = 0
 
     def observe(self, seconds: float) -> None:
         self.processing_seconds += seconds
