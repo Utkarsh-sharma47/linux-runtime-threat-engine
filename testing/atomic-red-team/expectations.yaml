@@ -5,10 +5,26 @@
 # engine's actual collectors and rules. A test without a profile is always graded
 # INCONCLUSIVE: add a reviewed profile before drawing conclusions.
 #
+# Keys read by the monitor-based lab runner (run_atomic_test.ps1 / atomic_report.py):
 #   key_processes   process names (kernel comm, max 15 chars) that carry the behaviour
 #   expected_rules  engine rule IDs that should match; [] = no current rule covers it
-#   telemetry       event types required; the live collector provides PROCESS_START only
-#   cleanup_paths   paths that must not exist after cleanup (checked by verify_cleanup.sh)
+#   telemetry       event types required (live /proc polling provides PROCESS_START only;
+#                   the offline strace collector also provides FILE_ACCESS,
+#                   NETWORK_CONNECTION, PRIVILEGE_CHANGE and PROCESS_EXIT)
+#   cleanup_paths   paths that must not exist after cleanup
+#
+# Additional keys read by `runtime-engine atomic` (offline evaluation):
+#   modules         component -> {rules: [...], requires_readable: [...]}; components are
+#                   rules, persistence, network, anomaly, integrity, exposure, ransomware.
+#                   A component that is not listed is NOT APPLICABLE; rules: [] means it
+#                   applies but no current rule covers the behaviour (coverage check).
+#   input_args      reviewed input argument overrides (also passed with --input-arg)
+#   reviewed_risk   risk class after human review; valid ONLY with exactly input_args
+#   environment     workstation | isolated-vm
+#   cleanup_safe / cleanup_note   human review of the test's own cleanup command
+#   fixtures        files the workflow creates under /tmp/rte-atomic-lab/ as test targets
+#   module_paths    reviewed additions to module configuration for the run
+#   benign          the behaviour is benign; any detection is a false-positive observation
 
 a315bfff-7a98-403b-b442-2ea1b255e556:
   technique: T1036.003
@@ -22,7 +38,14 @@ a315bfff-7a98-403b-b442-2ea1b255e556:
     script from stdin stays alive as the parent of sleep for about 5 s, so a 2 s /proc
     poll should see a process named crond whose executable is /tmp/crond, which RT002
     (execution from a temporary location) matches. The cp file write itself is not
-    collected live.
+    collected live. Offline, strace records the execve of /tmp/crond directly. The
+    anomaly component needs a reviewed baseline model (anomaly collect, review, train);
+    without one it is INCONCLUSIVE, never a detection.
+  cleanup_safe: true
+  cleanup_note: "rm /tmp/crond removes only the copied shell"
+  modules:
+    rules: {rules: [RT002]}
+    anomaly: {rules: [AN001]}
 
 b04ed73c-7d43-4dc8-b563-a2fc595cba1a:
   technique: T1059.004
@@ -35,7 +58,11 @@ b04ed73c-7d43-4dc8-b563-a2fc595cba1a:
     A 5 s shell loop (sh -c 'for ...; sleep 1') started by Invoke-AtomicTest. The
     executor sh should be observed as a child of the runner. No current rule targets a
     benign shell loop, so the expected grade is NOT DETECTED (rule coverage gap) once
-    the process is observed; this test validates telemetry and attribution.
+    the process is observed; this test validates telemetry and attribution. Regression
+    example: the 2026-11-13 monitor-based run was graded NOT DETECTED for this reason.
+  benign: true
+  modules:
+    rules: {rules: []}
 
 2a9b677d-a230-44f4-ad86-782df1ef108c:
   technique: T1033
@@ -46,5 +73,131 @@ b04ed73c-7d43-4dc8-b563-a2fc595cba1a:
   cleanup_paths: []
   rationale: >-
     users, w and who each exit within milliseconds. A 2 s /proc poll will usually miss
-    them, so the expected grade is INCONCLUSIVE (telemetry gap), which demonstrates the
-    polling limitation rather than a detection.
+    them, so the expected grade with the live monitor is INCONCLUSIVE (telemetry gap),
+    which demonstrates the polling limitation rather than a detection. Offline, strace
+    records each execve, so the processes are observed and the expected grade becomes
+    NOT DETECTED (no current rule covers user discovery).
+  benign: true
+  modules:
+    rules: {rules: []}
+
+2d7c471a-e887-4b78-b0dc-b0df1f2e0658:
+  technique: T1071.001
+  name: Malicious User Agents - Nix
+  key_processes: [curl]
+  expected_rules: [RT005, RT006]
+  telemetry: [PROCESS_START, NETWORK_CONNECTION]
+  cleanup_paths: []
+  input_args: {domain: 203.0.113.10}
+  reviewed_risk: B
+  review_note: >-
+    reviewed with domain=203.0.113.10 only: TEST-NET-3 (RFC 5737) is reserved for
+    documentation and not routed on the internet, so the four curl requests send
+    unanswered TCP SYNs and stop after their 3 s timeout; no data reaches any host
+  rationale: >-
+    Four curl requests with unusual user agents, each started by the sh executor. RT005
+    (transfer utility launched by a shell) matches each curl PROCESS_START, and the
+    traced connect() to 203.0.113.10 matches RT006 (configured watch destination).
+    Four connections are too few for beacon analysis (minimum 6), which is correct.
+  cleanup_safe: true
+  cleanup_note: "the test has no cleanup and leaves nothing behind"
+  modules:
+    rules: {rules: [RT005, RT006]}
+    network: {rules: [RT006]}
+
+34ca1464-de9d-40c6-8c77-690adf36a135:
+  technique: T1222.002
+  name: chmod - Change file or folder mode (numeric mode)
+  key_processes: [chmod]
+  expected_rules: []
+  telemetry: [PROCESS_START, FILE_ACCESS]
+  cleanup_paths: []
+  input_args:
+    numeric_mode: "4755"
+    file_or_folder: /tmp/rte-atomic-lab/T1222.002/lab-tool
+  reviewed_risk: B
+  review_note: >-
+    reviewed with numeric_mode=4755 on a workflow-created lab file owned by this user:
+    a set-user-ID bit on your own file grants no privilege, and the file is a two-line
+    script that is never executed (the kernel ignores SUID on scripts anyway)
+  rationale: >-
+    chmod sets SUID on a lab file. The lab directory is added to the persistence
+    monitor's privileged directories, the exposure analyzer's SUID paths and the
+    integrity paths for this run, so the state difference must show PM005 (new SUID
+    executable), EX001 (SUID executable owned by a non-root user) and FI004 (mode
+    changed in the Merkle tree). No RT rule covers chmod, so the rule engine is not
+    expected to apply. The default upstream target /tmp/AtomicRedTeam/... does not exist
+    on this host, which would make the unmodified test fail.
+  cleanup_safe: true
+  cleanup_note: "the test has no cleanup; atomic cleanup removes the lab fixture"
+  fixtures:
+    /tmp/rte-atomic-lab/T1222.002/lab-tool: "#!/bin/sh\necho 'runtime-engine lab fixture (never executed)'\n"
+  module_paths:
+    persistence.privileged_dirs: [/tmp/rte-atomic-lab]
+    exposure.suid_paths: [/tmp/rte-atomic-lab]
+    integrity.paths: [/tmp/rte-atomic-lab]
+  modules:
+    persistence: {rules: [PM005]}
+    exposure: {rules: [EX001]}
+    integrity: {rules: [FI004]}
+
+simulator-ransomware:
+  technique: T1486
+  name: Safe ransomware behaviour simulator (not an Atomic test)
+  key_processes: []
+  expected_rules: []
+  telemetry: [PROCESS_START, FILE_ACCESS]
+  cleanup_paths: []
+  rationale: >-
+    The Linux T1486 atomics encrypt one copy of /etc/passwd (gpg, 7z, ccrypt, openssl);
+    #1 and #4 do not run as written (an unset $which_gpg, and RSA cannot encrypt a file
+    that large), and one file is not ransomware-like behaviour anyway. The dedicated
+    simulator rewrites and renames its own lab files, which the ransomware detector
+    watching that lab must flag as RW001.
+  cleanup_safe: true
+  cleanup_note: "removes only simulator-created files and the empty lab"
+  modules:
+    ransomware: {rules: [RW001]}
+
+# Persistence tests: isolated VM only (class C). Profiles document the expected result.
+
+435057fb-74b1-410e-9403-d81baf194f75:
+  technique: T1053.003
+  name: Cron - Replace crontab with referenced file
+  key_processes: [crontab]
+  expected_rules: []
+  telemetry: [PROCESS_START, FILE_ACCESS]
+  cleanup_paths: [/tmp/persistevil]
+  environment: isolated-vm
+  rationale: >-
+    Replaces the user's crontab. crontab is set-GID crontab: under strace it runs without
+    that privilege and cannot write the spool, so run this test with --collector proc.
+    /var/spool/cron/crontabs is readable only by root: a non-root engine cannot see the
+    change, so the persistence component is INCONCLUSIVE unless the engine runs as root
+    in the VM.
+  cleanup_safe: true
+  cleanup_note: "restores the previous crontab from /tmp/notevil (an empty one if there was none)"
+  modules:
+    persistence: {rules: [PM002], requires_readable: [/var/spool/cron/crontabs]}
+
+0a898315-4cfa-4007-bafe-33a4646d115f:
+  technique: T1546.004
+  name: Add command to .bashrc
+  key_processes: [sh]
+  expected_rules: []
+  telemetry: [PROCESS_START, FILE_ACCESS]
+  cleanup_paths: []
+  environment: isolated-vm
+  rationale: >-
+    Appends one line to ~/.bashrc. The persistence monitor does not watch shell startup
+    files, so the expected persistence result is NOT DETECTED (coverage gap); with
+    ~/.bashrc added to the integrity paths the Merkle tree shows FI001.
+  cleanup_safe: false
+  cleanup_note: >-
+    the upstream cleanup removes the last TWO lines of ~/.bashrc although the test adds
+    one, deleting a line of the user's own file; restore ~/.bashrc from a backup instead
+  module_paths:
+    integrity.paths: [~/.bashrc]
+  modules:
+    persistence: {rules: []}
+    integrity: {rules: [FI001]}
