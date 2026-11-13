@@ -42,7 +42,9 @@ def status_text(status: str | None) -> Text:
     return Text(label, style=STATUS_STYLES.get(status or "", "dim"))
 
 
-def report_header(title: str, report: ScanReport | None, extra: list[tuple[str, str]]) -> Table:
+def report_header(
+    title: str, report: ScanReport | None, extra: list[tuple[str, RenderableType]]
+) -> Table:
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold", no_wrap=True)
     grid.add_column(overflow="fold")

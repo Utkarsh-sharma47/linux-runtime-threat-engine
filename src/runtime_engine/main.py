@@ -32,6 +32,7 @@ NOT_FOUND = {
     "persistence": "error: finding not found",
     "network": "error: finding not found",
     "anomaly": "error: no live process with that PID",
+    "integrity": "error: file not in the integrity tree",
     "process": "error: no stored process with that PID",
     "session": "error: session not found",
 }
@@ -172,6 +173,34 @@ def parser() -> argparse.ArgumentParser:
     anomaly.add_argument("--interval", type=positive, default=10)
     anomaly.add_argument("--output", type=Path)
     anomaly.add_argument("--json", action="store_true")
+    integrity = sub.add_parser(
+        "integrity",
+        help="SHA-256 Merkle-tree file integrity: baseline, verify, show, proof, keygen, demo",
+        description="baseline: hash configured files into a Merkle tree (optionally export a "
+        "root anchor, HMAC-signed with --key-file); verify: recompute and list added, deleted "
+        "and modified files (--anchor checks the stored baseline against an exported root); "
+        "proof: membership proof for one file; demo: temporary files only.",
+    )
+    integrity.add_argument(
+        "action", choices=["baseline", "verify", "show", "proof", "keygen", "demo"]
+    )
+    integrity.add_argument(
+        "--path", dest="paths", action="append", help="File or directory (repeatable)"
+    )
+    integrity.add_argument("--export", type=Path, help="Write the root anchor manifest (new file)")
+    integrity.add_argument("--key-file", type=Path, help="HMAC key for signing or checking anchors")
+    integrity.add_argument("--anchor", type=Path, help="Exported anchor manifest to verify against")
+    integrity.add_argument("--full", action="store_true", help="Re-hash every file")
+    integrity.add_argument("--file", help="File for proof")
+    integrity.add_argument(
+        "--baseline",
+        dest="use_baseline",
+        action="store_true",
+        help="Prove membership in the baseline tree instead of the current one",
+    )
+    integrity.add_argument("--output", type=Path, help="Key file to create (keygen)")
+    integrity.add_argument("--keep", action="store_true", help="Keep the demo directory")
+    integrity.add_argument("--json", action="store_true")
     return result
 
 
@@ -254,6 +283,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 duration=args.duration,
                 interval=args.interval,
                 output=args.output,
+            )
+        if args.command == "integrity":
+            return security_app.integrity_command(
+                database,
+                settings,
+                rules,
+                console,
+                args.action,
+                as_json=args.json,
+                paths=args.paths,
+                export=args.export,
+                key_file=args.key_file,
+                anchor=args.anchor,
+                full=args.full,
+                file=args.file,
+                use_baseline=args.use_baseline,
+                output=args.output,
+                keep=args.keep,
             )
         if args.command == "incidents":
             print(

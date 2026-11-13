@@ -2,6 +2,8 @@
 
 import json
 import os
+import secrets
+import shutil
 import sys
 import tempfile
 import time
@@ -10,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from runtime_engine.collector.net_collector import NetCollector
@@ -27,12 +30,26 @@ from runtime_engine.security.anomaly import (
     synthetic_rows,
     train,
 )
-from runtime_engine.security.findings import ScanReport
-from runtime_engine.security.modules import persistence_monitor
+from runtime_engine.security.findings import Finding, ScanReport
+from runtime_engine.security.integrity import (
+    FINDING_RULES,
+    IntegrityMonitor,
+    MerkleTree,
+    baseline_body,
+    baseline_proof,
+    check_anchor,
+    export_manifest,
+    leaves_from_body,
+    verify_proof,
+)
+from runtime_engine.security.integrity import collect as collect_leaves
+from runtime_engine.security.integrity import demo as integrity_demo
+from runtime_engine.security.modules import persistence_monitor, policy
 from runtime_engine.security.network import NetworkMonitor, analyze_series, demo_series
 from runtime_engine.security.persistence import PersistenceMonitor, entries_to_body
 from runtime_engine.storage.database import Database
 from runtime_engine.terminal.views.anomaly_view import model_panel, render_anomaly
+from runtime_engine.terminal.views.integrity_view import render_integrity, render_proof
 from runtime_engine.terminal.views.network_view import render_network
 from runtime_engine.terminal.views.persistence_view import render_persistence
 from runtime_engine.terminal.views.security_common import finding_detail
@@ -457,3 +474,195 @@ def anomaly_collect(console: Console, output: Path, duration: float, interval: f
         "unexpected) before training with --i-reviewed-baseline."
     )
     return 0
+
+
+def write_private(path: Path, data: bytes) -> None:
+    """Create a new owner-only file; never overwrite."""
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+
+
+def integrity_command(
+    database: Database,
+    settings: Settings,
+    rules: list[Rule],
+    console: Console,
+    action: str,
+    *,
+    as_json: bool = False,
+    paths: list[str] | None = None,
+    export: Path | None = None,
+    key_file: Path | None = None,
+    anchor: Path | None = None,
+    full: bool = False,
+    file: str | None = None,
+    use_baseline: bool = False,
+    output: Path | None = None,
+    keep: bool = False,
+) -> int:
+    config = settings.security.integrity
+    key = key_file.read_bytes() if key_file else None
+    if action == "keygen":
+        if output is None:
+            raise ValueError("integrity keygen needs --output FILE")
+        write_private(output, secrets.token_bytes(32))
+        console.print(
+            f"Wrote a 32-byte HMAC key to {output} (mode 0600). Keep it off this host: "
+            "anyone holding the key can sign a forged baseline anchor."
+        )
+        return 0
+    if action == "demo":
+        with tempfile.TemporaryDirectory(prefix="rte-integrity-demo-") as scratch:
+            result = integrity_demo(Path(scratch) / "lab", config)
+            if keep:
+                shutil.copytree(scratch, scratch + "-kept")
+        if as_json:
+            emit_json(result)
+        else:
+            console.print(render_demo(result))
+        return 0
+    if action == "baseline":
+        selected = paths or config.paths
+        leaves, coverage = collect_leaves(selected, config)
+        created = baseline_body(selected, leaves, coverage)
+        database.save_baseline("integrity", "default", created)
+        manifest = None
+        if export is not None:
+            manifest = export_manifest(created, key)
+            write_private(export, (json.dumps(manifest, indent=2) + "\n").encode())
+        result = {k: created[k] for k in ("root", "leaf_count", "created_at", "paths", "coverage")}
+        result["anchor_exported_to"] = str(export) if export else None
+        result["anchor_signed"] = bool(manifest and "hmac_sha256" in manifest)
+        result["warning"] = BASELINE_WARNING
+        if as_json:
+            emit_json(result)
+        else:
+            console.print(
+                f"Integrity baseline: {created['leaf_count']} files, root {created['root']}"
+            )
+            if export:
+                signed = "HMAC-signed" if result["anchor_signed"] else "unsigned"
+                console.print(f"Anchor ({signed}) written to {export}; store it off this host.")
+            console.print(BASELINE_WARNING, style="dim")
+        return 0
+    body = database.baseline("integrity")
+    if body is None:
+        print(
+            "error: no integrity baseline in this database; run: integrity baseline",
+            file=sys.stderr,
+        )
+        return 3
+    if action == "proof":
+        if not file:
+            raise ValueError("integrity proof needs --file PATH")
+        if use_baseline:
+            proof = baseline_proof(body, file)
+        else:
+            leaves, _ = collect_leaves(body["paths"], config, leaves_from_body(body))
+            tree = MerkleTree(leaves)
+            if file not in tree.index:
+                raise KeyError(file)
+            leaf = tree.leaves[tree.index[file]].hash().hex()
+            steps = tree.proof(file)
+            proof = {
+                "path": file,
+                "leaf": leaf,
+                "root": tree.root,
+                "proof": steps,
+                "verified": verify_proof(leaf, steps, tree.root),
+                "matches_baseline_root": verify_proof(leaf, steps, body["root"])
+                or (
+                    file in leaves_from_body(body)
+                    and leaves_from_body(body)[file].hash().hex() == leaf
+                ),
+            }
+        if as_json:
+            emit_json(proof)
+        else:
+            console.print(render_proof(proof))
+        return 0
+    if action == "show":
+        report = last_report(database, "integrity")
+        if as_json:
+            emit_json(
+                {
+                    "baseline": {k: body[k] for k in ("root", "leaf_count", "created_at", "paths")},
+                    "last_verification": report.as_dict() if report else None,
+                }
+            )
+        else:
+            anchored = report.summary.get("anchor") if report else None
+            console.print(
+                render_integrity(
+                    report, database.findings("integrity"), baseline=body, anchor=anchored
+                )
+            )
+        return 0
+    monitor = IntegrityMonitor(config, body, policy(settings, config))
+    report = monitor.scan(full=full)
+    anchor_result = None
+    if anchor is not None:
+        manifest = json.loads(anchor.read_text())
+        anchor_result = check_anchor(manifest, key, body["root"])
+        if (
+            not anchor_result["baseline_matches_anchor"]
+            or anchor_result["signature_valid"] is False
+        ):
+            title, severity = FINDING_RULES["FI005"]
+            report.findings.append(
+                Finding.create(
+                    "integrity",
+                    "FI005",
+                    "integrity baseline",
+                    title=title,
+                    severity=severity,
+                    evidence=anchor_result | {"summary": anchor_result["signature"]},
+                    explanation=(
+                        "The baseline root stored in the engine database differs from the "
+                        "externally anchored root, or the anchor's signature is invalid. The "
+                        "local baseline may have been replaced; do not trust verification "
+                        "results until this is explained."
+                    ),
+                )
+            )
+        report.findings, _ = policy(settings, config).apply(report.findings)
+        report.summary["anchor"] = anchor_result
+    promoted = record_report(database, report, rules, settings)
+    if as_json:
+        emit_json(
+            (monitor.last_result or {})
+            | {
+                "anchor": anchor_result,
+                "findings": [f.model_dump(mode="json") for f in report.findings],
+                "promoted_to_incidents": promoted,
+                "coverage": report.coverage.as_dict(),
+            }
+        )
+    else:
+        console.print(
+            render_integrity(report, report.findings, baseline=body, anchor=anchor_result)
+        )
+    return 0
+
+
+def render_demo(result: dict[str, Any]) -> Panel:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold", no_wrap=True)
+    grid.add_column(overflow="fold")
+    grid.add_row("LAB DIRECTORY", f"{result['directory']} (temporary, removed afterwards)")
+    grid.add_row("BASELINE ROOT", result["baseline_root"])
+    grid.add_row("CURRENT ROOT", result["current_root"])
+    grid.add_row("ROOT CHANGED", "yes" if result["root_changed"] else "no")
+    for key in ("modified", "metadata_changed", "added", "deleted"):
+        grid.add_row(key.replace("_", " ").upper(), ", ".join(result[key]) or "-")
+    for key in (
+        "proof_unchanged_file_against_baseline",
+        "proof_unchanged_file_against_current",
+        "proof_modified_file_against_baseline_root",
+        "proof_modified_file_against_current_root",
+    ):
+        grid.add_row(key.replace("_", " "), "verifies" if result[key] else "does NOT verify")
+    return Panel(
+        grid, title="FILE INTEGRITY DEMONSTRATION (temporary files only)", title_align="left"
+    )
