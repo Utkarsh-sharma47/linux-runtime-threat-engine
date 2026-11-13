@@ -338,10 +338,15 @@ def compact(snap: DashboardSnapshot, height: int, interactive: bool) -> Renderab
     return Group(*parts)
 
 
-def render_process_tree(state: DashboardState | None, width: int, height: int, *,
+def render_process_tree(
+    state: DashboardState | None,
+    width: int,
+    height: int,
+    *,
     process_tree: dict[str, Any] | None = None,
     selected_key: str | None = None,
-    show_suspicious_only: bool = False) -> RenderableType:
+    show_suspicious_only: bool = False,
+) -> RenderableType:
     """Render a process ancestry tree using Rich Tree.
 
     Shows observed parent-child relationships from the monitoring session.
@@ -372,13 +377,15 @@ def render_process_tree(state: DashboardState | None, width: int, height: int, *
     if process_tree is None:
         process_tree = state.build_process_tree()
 
+    def severity_of(key: str) -> Severity | None:
+        # Rule-match severity lives on the state's process record, not on the event.
+        record = state.processes.get(key)
+        return record.severity if record is not None else None
+
     # Select root if specified
     if selected_key is None:
         # Show tree rooted at first suspicious process
-        suspicious_keys = [k for k, v in process_tree.items()
-                          if v["lifecycle"] == ProcessLifecycle.EXITED
-                          or (getattr(v["event"], "severity", None) 
-                              and v["event"].severity.rank < 3)]
+        suspicious_keys = [k for k in process_tree if severity_of(k) is not None]
         if suspicious_keys:
             selected_key = suspicious_keys[0]
         else:
@@ -409,19 +416,15 @@ def render_process_tree(state: DashboardState | None, width: int, height: int, *
             suffix = " [EXITED]"
         elif lifecycle == ProcessLifecycle.GONE:
             suffix = " [GONE]"
-        elif lifecycle == ProcessLifecycle.RUNNING:
-            suffix = " [RUNNING]"
 
-        if show_suspicious_only and not (
-    getattr(event, "severity", None)
-    and getattr(event.severity, "rank", -1) < 3
-):
-            return  # Skip non-suspicious processes
+        severity = severity_of(key)
+        if show_suspicious_only and severity is None:
+            return  # Skip processes without a rule match
 
         # Create rich label
         label_text = f"PID {pid} {pname}{suffix}"
-        if getattr(event, "severity", None):
-            label_text += f" {severity_text(event.severity)}"
+        if severity is not None:
+            label_text += f" {severity.value}"
 
         node = Tree(label_text, guide_style="dim")
 
@@ -460,8 +463,9 @@ def render_process_tree(state: DashboardState | None, width: int, height: int, *
         suffix = " [GONE]"
 
     root_label = f"PID {pid} {pname}{suffix}"
-    if getattr(root_event, "severity", None):
-        root_label += f" {severity_text(root_event.severity)}"
+    root_severity = severity_of(root_key)
+    if root_severity is not None:
+        root_label += f" {root_severity.value}"
 
     root_tree = Tree(root_label, guide_style="bold")
 
