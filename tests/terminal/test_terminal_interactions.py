@@ -316,3 +316,27 @@ def test_database_source_lookups(chain, database):
     details = process_details(source, soffice.process_key)
     assert details is not None and details.severity is None
     assert Path("datasets/chain.jsonl").exists()
+
+
+def test_process_tree_and_live_logs_keep_monitoring(database, tmp_path):
+    """t opens the tree without stopping; l runs live logs; b returns; q in live logs stops."""
+    parent = proc_event(8200, name="dropper", exe="/tmp/dropper", start="82000")
+    child = proc_event(8201, ppid=8200, name="sh", start="82010", parent_start="82000")
+    session, state = session_for(database, [[proc_event(8100)], [parent, child]])
+    keys = FakeKeys([None] * 5 + ["t", "l", "b", "l", "q"])
+    monitor, console = monitor_for(session, keys, [""], tmp_path, database)
+    session.start()
+    reason = monitor.run()
+    session.shutdown(reason)
+    text = text_of(console)
+    assert reason == "user_quit"
+    assert "PROCESS TREE" in text and "PID 8200 dropper MEDIUM" in text and "[RUNNING]" not in text
+    assert keys.suspended == 1  # only the tree page used line input
+    assert state.status == "STOPPED"
+
+
+def test_unknown_live_log_input_returns_to_dashboard(chain, database, tmp_path):
+    from runtime_engine.terminal.live_logs import LiveLogRenderer
+
+    state, _ = chain
+    assert LiveLogRenderer(make_console(), state).run() == "return_to_dashboard"

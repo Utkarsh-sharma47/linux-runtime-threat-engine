@@ -35,6 +35,7 @@ class Verbosity(IntEnum):
     def parse(cls, name: str) -> "Verbosity":
         return cls[name.upper()]
 
+
 class ProcessLifecycle(StrEnum):
     RUNNING = "running"
     EXITED = "exited"
@@ -716,7 +717,7 @@ class DashboardState:
 
     def build_process_tree(self, include_baseline: bool = False) -> dict[str, Any]:
         """Build a process tree dictionary from observed records.
-        
+
         Returns a dict structure:
             {
                 process_key: {
@@ -734,7 +735,7 @@ class DashboardState:
                 # Skip baseline processes unless requested
                 if not include_baseline and record.baseline:
                     continue
-                
+
                 # Determine lifecycle status
                 now = self.clock()
                 lifecycle = ProcessLifecycle.RUNNING
@@ -743,7 +744,7 @@ class DashboardState:
                         lifecycle = ProcessLifecycle.EXITED
                     else:
                         lifecycle = ProcessLifecycle.GONE
-                
+
                 tree[key] = {
                     "event": record.event,
                     "lifecycle": lifecycle,
@@ -755,7 +756,7 @@ class DashboardState:
                         "exit_status": record.exit_status,
                         "exit_observed_at": record.exit_observed_at,
                         "baseline": record.baseline,
-                    }
+                    },
                 }
             return tree
 

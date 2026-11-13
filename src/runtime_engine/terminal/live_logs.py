@@ -1,8 +1,9 @@
 """Live event stream formatting for the dashboard panel and for line-oriented output.
-# type: ignore
 
 Also provides LiveLogRenderer for the dedicated live-logs inspection page.
 """
+
+from collections.abc import Callable
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
@@ -91,16 +92,15 @@ def plain_line(entry: LogEntry) -> str:
 
 
 def log_panel(entries: list[LogEntry], height: int, verbosity: Verbosity) -> RenderableType:
-    body: RenderableType
     """Newest entries at the bottom, sized to the panel so the layout never scrolls."""
+    body: RenderableType
     capacity = max(0, (height - 2) // 2)
     shown = entries[-capacity:] if capacity else []
     title = f"LIVE SECURITY EVENTS (verbosity: {verbosity.name.lower()})"
     if not shown:
         body = Text("No new events yet. Monitoring continues.", style="dim")
     else:
-        # type: ignore[assignment]
-            body = Group(*(line for e in shown for line in entry_lines(e)))
+        body = Group(*(line for e in shown for line in entry_lines(e)))
     return Panel(body, title=title, title_align="left", border_style="blue", height=height)
 
 
@@ -127,8 +127,10 @@ class LiveLogRenderer:
         *,
         pause_shortcut: str = "p",
         filter_shortcut: str = "f",
+        read_key: Callable[[float], str | None] | None = None,
     ) -> None:
         self.console = console
+        self.key_reader = read_key
         self.state = state
         self.paused = False
         self.filter_verbosity = Verbosity.NORMAL
@@ -162,6 +164,7 @@ class LiveLogRenderer:
         if self.paused:
             title += "  [PAUSED]"
 
+        panel_body: RenderableType
         if not shown and not self.paused:
             # Show waiting message only when not paused and no entries
             panel_body = Text("No new events yet. Monitoring continues.", style="dim")
@@ -188,7 +191,7 @@ class LiveLogRenderer:
         """
         failures = 0
         with Live(
-            self.console,
+            console=self.console,
             screen=True,
             auto_refresh=False,
             redirect_stdout=False,
@@ -218,25 +221,10 @@ class LiveLogRenderer:
                         raise
 
     def _read_key(self, timeout: float) -> str | None:
-        """Read a single key from the terminal stdin."""
-        import os
-        import select
-
-        try:
-            fd = self.console.file.fileno()
-        except (AttributeError, OSError):
-            return None
-
-        try:
-            ready, _, _ = select.select([fd], [], [], timeout)
-            if not ready:
-                return None
-            data = os.read(fd, 32)
-            if not data:
-                return None
-            return data[:1].decode("ascii", errors="ignore") or None
-        except (OSError, ValueError):
-            return None
+        """Single key from the dashboard's key reader (stdin in cbreak mode)."""
+        if self.key_reader is None:
+            return "b"  # no key input available: return to the dashboard
+        return self.key_reader(timeout)
 
     def _handle_key(self, key: str) -> str | None:
         """Handle a key press. Returns a stop reason string, or None to continue."""

@@ -9,7 +9,7 @@ import contextlib
 import os
 import select
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TextIO
@@ -36,6 +36,7 @@ from runtime_engine.monitor.state import DashboardState, EventRecord
 from runtime_engine.process.liveness import Liveness, check, start_time
 from runtime_engine.storage.database import Database
 from runtime_engine.terminal.formatting import clean, severity_text
+from runtime_engine.terminal.live_logs import LiveLogRenderer
 from runtime_engine.terminal.renderer import DashboardRenderer, PlainLogRenderer
 from runtime_engine.terminal.views import event_view, incident_view, metrics_view, process_view
 
@@ -62,8 +63,6 @@ INSPECTION_COMMANDS = (
     ("q", "Stop monitoring"),
     ("h", "Help"),
 )
-
-
 
 
 class KeyReader(Protocol):
@@ -105,6 +104,16 @@ class TerminalKeys:
             return None
         data = os.read(fd, 32)  # also swallows the rest of escape sequences (arrow keys)
         return data[:1].decode("ascii", errors="ignore") or None
+
+    @contextlib.contextmanager
+    def suspend(self) -> Iterator[None]:  # pragma: no cover - requires a real TTY
+        import tty
+
+        self._restore()
+        try:
+            yield
+        finally:
+            tty.setcbreak(self.stream.fileno())
 
 
 class RenderingUnavailable(Exception):
@@ -154,8 +163,8 @@ class Inspector:
             raise StopMonitoring("user_quit")
         elif key == "b":
             return  # return to dashboard
-        elif key == "l":
-            self.live_logs_page()
+        elif key == "t":
+            self.process_tree_page()
         else:
             # Show banner for inspection pages
             self._banner()
@@ -407,30 +416,34 @@ class Inspector:
     def process_tree_page(self) -> None:
         """Open the process tree view."""
         from runtime_engine.terminal.dashboard import render_process_tree
-        
+
         tree = self.state.build_process_tree() if self.state else {}
         selected_key = None
-        
-        # Find a suspicious process to highlight
+
+        # Root the view at a process with a rule match, if any.
         if self.state:
-            for key, data in tree.items():
-                if data["event"].severity and data["event"].severity.rank < 3:
+            for key in tree:
+                record = self.state.process(key)
+                if record is not None and record.severity is not None:
                     selected_key = key
                     break
-        
+
         if selected_key is None:
             selected_key = next(iter(tree)) if tree else None
-        
+
         # Render the tree
         try:
             tree_render = render_process_tree(
-                self.state, self.console.width, self.console.height,
-                process_tree=tree, selected_key=selected_key
+                self.state,
+                self.console.width,
+                self.console.height,
+                process_tree=tree,
+                selected_key=selected_key,
             )
             self.console.print(tree_render)
         except Exception as e:
             self.say(f"Error rendering process tree: {e}")
-        
+
         # Ask to go back
         self.ask("Press Enter to return to the dashboard ")
 
@@ -477,16 +490,14 @@ class Inspector:
 
     # ----- live logs -----
 
-    def live_logs_page(self) -> str | None:
+    def live_logs_page(self, read_key: Callable[[float], str | None]) -> str | None:
         """Open the live event log view. Monitoring continues in the background.
 
-        Returns a stop reason string, or None if user pressed [b] back to dashboard.
+        Returns "user_quit" if the user pressed q, otherwise None (back to dashboard).
         """
-        from runtime_engine.terminal.interactions import LiveLogRenderer
-
-        renderer = LiveLogRenderer(self.console, self.state)
-        result = renderer.run()
-        return result
+        assert self.state is not None
+        result = LiveLogRenderer(self.console, self.state, read_key=read_key).run()
+        return "user_quit" if result == "user_quit" else None
 
 
 class StopMonitoring(Exception):
@@ -557,7 +568,7 @@ class InteractiveMonitor:
                 key = key.lower()
                 if key == "q":
                     return "user_quit"
-                if key in ("p", "i", "e", "m", "r", "l", "t", "h"):
+                if key in PAGES or key == "h":
                     return key
 
     def run(self) -> str:
@@ -566,13 +577,18 @@ class InteractiveMonitor:
             with self.keys:
                 while True:
                     outcome = self._dashboard()
-                    if outcome not in ("p", "i", "e", "m", "r", "l", "h"):
+                    if outcome not in PAGES and outcome != "h":
                         return outcome
+                    if outcome == "l":
+                        # Live logs keep single-key input, so the keys stay in cbreak mode.
+                        if self.inspector.live_logs_page(self.keys.read_key) == "user_quit":
+                            return "user_quit"
+                        continue
                     with self.keys.suspend():
                         try:
                             self.inspector.dispatch(outcome)
-                        except StopMonitoring:
-                            return outcome
+                        except StopMonitoring as stop:
+                            return stop.reason
         except KeyboardInterrupt:
             return self.session.reason or "keyboard_interrupt"
         except RenderingUnavailable:
