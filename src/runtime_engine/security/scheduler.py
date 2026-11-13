@@ -12,6 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
 
+from runtime_engine.events.schema import Event
 from runtime_engine.security.findings import Finding, ScanReport, SecurityState
 
 
@@ -44,9 +45,11 @@ class SecurityScheduler:
         submit: Callable[[Finding], bool],
         security: SecurityState,
         stop: threading.Event,
+        submit_event: Callable[[Event], bool] | None = None,
     ) -> None:
         self.modules = modules
         self.submit = submit
+        self.submit_event = submit_event
         self.security = security
         self.stop = stop
         self.threads: list[threading.Thread] = []
@@ -64,6 +67,10 @@ class SecurityScheduler:
         while not self.stop.is_set():
             report = safe_scan(module)
             self.security.record_report(report)
+            submit_event = self.submit_event
+            for event in report.events if submit_event is not None else []:
+                if submit_event is not None and not submit_event(event):
+                    return
             for finding in report.findings:
                 if not self.submit(finding):
                     return  # session stopping: no new findings are accepted

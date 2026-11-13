@@ -64,10 +64,28 @@ class PersistenceSettings(ModuleSettings):
     max_hash_bytes: int = Field(default=1_048_576, ge=0)
 
 
+class NetworkSettings(ModuleSettings):
+    """Socket snapshots from /proc/net; see docs/security/NETWORK.md."""
+
+    interval_seconds: float = Field(default=5, ge=1, le=3600)
+    include_loopback: bool = False
+    exclude_cidrs: list[str] = Field(default_factory=list)
+    emit_events: bool = True  # newly observed connections become NETWORK_CONNECTION events
+    history_per_flow: int = Field(default=50, ge=3, le=1000)
+    max_tracked_flows: int = Field(default=5000, ge=10, le=100_000)
+    beacon_min_connections: int = Field(default=6, ge=3)
+    beacon_cv_threshold: float = Field(default=0.25, gt=0, le=2)
+    beacon_min_interval_seconds: float = Field(default=10, ge=0)
+    beacon_max_interval_seconds: float = Field(default=3600, gt=0)
+    repeat_threshold: int = Field(default=30, ge=2)
+    repeat_window_seconds: float = Field(default=600, gt=0)
+
+
 class SecuritySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     promote_min_severity: Severity = Severity.MEDIUM  # findings below stay out of incidents
     persistence: PersistenceSettings = Field(default_factory=PersistenceSettings)
+    network: NetworkSettings = Field(default_factory=NetworkSettings)
 
 
 class Settings(BaseModel):
