@@ -154,6 +154,30 @@ class ExposureSettings(ModuleSettings):
     )
 
 
+class RansomwareSettings(ModuleSettings):
+    """Behavioural ransomware early warning; off until directories are configured."""
+
+    enabled: bool = True
+    interval_seconds: float = Field(default=2, ge=0.2, le=3600)
+    directories: list[str] = Field(default_factory=list)  # nothing personal by default
+    exclude: list[str] = Field(default_factory=lambda: ["*.swp", "*~", "*.tmp", ".git"])
+    max_watches: int = Field(default=2000, ge=1)
+    window_seconds: float = Field(default=30, gt=0)
+    max_events_per_window: int = Field(default=20_000, ge=100)
+    sample_bytes: int = Field(default=65536, ge=256, le=4 * 1024 * 1024)
+    entropy_reads_per_second: float = Field(default=50, gt=0)
+    high_entropy: float = Field(default=7.2, gt=0, le=8)
+    low_entropy: float = Field(default=6.0, gt=0, le=8)
+    modification_threshold: int = Field(default=30, ge=1)  # per window
+    rename_threshold: int = Field(default=15, ge=1)
+    files_threshold: int = Field(default=20, ge=1)
+    directories_threshold: int = Field(default=3, ge=1)
+    entropy_ratio_threshold: float = Field(default=0.5, gt=0, le=1)
+    extension_ratio_threshold: float = Field(default=0.6, gt=0, le=1)
+    alert_score: float = Field(default=50, gt=0, le=100)
+    min_indicators: int = Field(default=2, ge=1)
+
+
 class SecuritySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     promote_min_severity: Severity = Severity.MEDIUM  # findings below stay out of incidents
@@ -162,6 +186,7 @@ class SecuritySettings(BaseModel):
     anomaly: AnomalySettings = Field(default_factory=AnomalySettings)
     integrity: IntegritySettings = Field(default_factory=IntegritySettings)
     exposure: ExposureSettings = Field(default_factory=ExposureSettings)
+    ransomware: RansomwareSettings = Field(default_factory=RansomwareSettings)
 
 
 class Settings(BaseModel):
