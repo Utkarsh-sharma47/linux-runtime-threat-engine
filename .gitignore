@@ -13,3 +13,8 @@ htmlcov/
 coverage.xml
 dist/
 *.egg-info/
+# Atomic Red Team lab: run artifacts contain host telemetry (hostname, IPs, users)
+testing/atomic-red-team/test-results/*
+!testing/atomic-red-team/test-results/README.md
+testing/reports/*
+!testing/reports/.gitkeep
