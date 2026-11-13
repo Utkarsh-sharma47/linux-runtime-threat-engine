@@ -2,6 +2,7 @@
 
 from runtime_engine.config.settings import ModuleSettings, Settings
 from runtime_engine.security.anomaly import AnomalyDetector
+from runtime_engine.security.exposure import ExposureAnalyzer
 from runtime_engine.security.findings import SecurityState, SeverityPolicy
 from runtime_engine.security.integrity import IntegrityMonitor
 from runtime_engine.security.network import NetworkMonitor
@@ -65,4 +66,14 @@ def build_modules(
         )
     else:
         off["integrity"] = "disabled in configuration"
+    exposure = settings.security.exposure
+    if exposure.enabled:
+        accepted = database.baseline("exposure", "accepted") or {}
+        modules.append(
+            ExposureAnalyzer(
+                exposure, policy(settings, exposure), set(accepted.get("finding_ids", []))
+            )
+        )
+    else:
+        off["exposure"] = "disabled in configuration"
     return modules, off

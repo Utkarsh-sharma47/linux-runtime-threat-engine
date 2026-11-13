@@ -33,6 +33,7 @@ NOT_FOUND = {
     "network": "error: finding not found",
     "anomaly": "error: no live process with that PID",
     "integrity": "error: file not in the integrity tree",
+    "exposure": "error: finding not found",
     "process": "error: no stored process with that PID",
     "session": "error: session not found",
 }
@@ -201,6 +202,22 @@ def parser() -> argparse.ArgumentParser:
     integrity.add_argument("--output", type=Path, help="Key file to create (keygen)")
     integrity.add_argument("--keep", action="store_true", help="Keep the demo directory")
     integrity.add_argument("--json", action="store_true")
+    exposure = sub.add_parser(
+        "exposure",
+        help="Attack surface analysis: scan, report, baseline, show",
+        description="Read-only posture checks: SUID/SGID, capabilities, writable PATH dirs, "
+        "sensitive file permissions, root listening services, root units, suspicious process "
+        "locations and sudoers patterns (when readable). baseline accepts current findings "
+        "as known posture. Nothing on the host is modified.",
+    )
+    exposure.add_argument("action", choices=["scan", "report", "baseline", "show"])
+    exposure.add_argument(
+        "--incremental", action="store_true", help="Reuse the saved scan state (scan only)"
+    )
+    exposure.add_argument("--severity", choices=["low", "medium", "high", "critical"])
+    exposure.add_argument("--rule", help="Only one rule, e.g. EX001")
+    exposure.add_argument("--id", dest="finding_id", help="Finding to show")
+    exposure.add_argument("--json", action="store_true")
     return result
 
 
@@ -301,6 +318,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 use_baseline=args.use_baseline,
                 output=args.output,
                 keep=args.keep,
+            )
+        if args.command == "exposure":
+            return security_app.exposure_command(
+                database,
+                settings,
+                rules,
+                console,
+                args.action,
+                as_json=args.json,
+                incremental=args.incremental,
+                severity=args.severity,
+                rule=args.rule,
+                finding_id=args.finding_id,
             )
         if args.command == "incidents":
             print(

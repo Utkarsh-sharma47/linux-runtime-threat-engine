@@ -18,7 +18,7 @@ from rich.table import Table
 from runtime_engine.collector.net_collector import NetCollector
 from runtime_engine.config.settings import Settings
 from runtime_engine.detection.rule_loader import Rule
-from runtime_engine.events.schema import Event
+from runtime_engine.events.schema import Event, Severity
 from runtime_engine.pipeline import Pipeline
 from runtime_engine.security.anomaly import (
     ProcessSampler,
@@ -30,6 +30,7 @@ from runtime_engine.security.anomaly import (
     synthetic_rows,
     train,
 )
+from runtime_engine.security.exposure import ExposureAnalyzer
 from runtime_engine.security.findings import Finding, ScanReport
 from runtime_engine.security.integrity import (
     FINDING_RULES,
@@ -49,6 +50,7 @@ from runtime_engine.security.network import NetworkMonitor, analyze_series, demo
 from runtime_engine.security.persistence import PersistenceMonitor, entries_to_body
 from runtime_engine.storage.database import Database
 from runtime_engine.terminal.views.anomaly_view import model_panel, render_anomaly
+from runtime_engine.terminal.views.exposure_view import render_exposure
 from runtime_engine.terminal.views.integrity_view import render_integrity, render_proof
 from runtime_engine.terminal.views.network_view import render_network
 from runtime_engine.terminal.views.persistence_view import render_persistence
@@ -666,3 +668,73 @@ def render_demo(result: dict[str, Any]) -> Panel:
     return Panel(
         grid, title="FILE INTEGRITY DEMONSTRATION (temporary files only)", title_align="left"
     )
+
+
+def exposure_analyzer(settings: Settings, database: Database) -> ExposureAnalyzer:
+    config = settings.security.exposure
+    accepted = database.baseline("exposure", "accepted") or {}
+    return ExposureAnalyzer(config, policy(settings, config), set(accepted.get("finding_ids", [])))
+
+
+def exposure_command(
+    database: Database,
+    settings: Settings,
+    rules: list[Rule],
+    console: Console,
+    action: str,
+    *,
+    as_json: bool = False,
+    incremental: bool = False,
+    severity: str | None = None,
+    rule: str | None = None,
+    finding_id: str | None = None,
+) -> int:
+    level = Severity(severity.upper()) if severity else None
+    if action == "show" or finding_id:
+        if not finding_id:
+            raise ValueError("exposure show needs --id FINDING")
+        return show_finding(database, console, finding_id, as_json)
+    if action == "report":
+        report = last_report(database, "exposure")
+        if report is None:
+            print("error: no exposure scan recorded; run: exposure scan", file=sys.stderr)
+            return 3
+        if as_json:
+            emit_json(report.as_dict())
+        else:
+            console.print(render_exposure(report, report.findings, severity=level, rule=rule))
+        return 0
+    analyzer = exposure_analyzer(settings, database)
+    state = database.baseline("exposure", "scan-state")
+    if incremental and state:
+        analyzer.known_dirs = dict(state["known_dirs"])
+        analyzer.known_privileged = set(state["known_privileged"])
+        analyzer.scans = 1  # resume: not the first scan, so the cached state is used
+    report = analyzer.scan(full=not (incremental and state))
+    database.save_baseline(
+        "exposure",
+        "scan-state",
+        {"created_at": report.started_at.isoformat(), "known_dirs": analyzer.known_dirs,
+         "known_privileged": sorted(analyzer.known_privileged)},
+    )  # fmt: skip
+    if action == "baseline":
+        ids = [f.finding_id for f in report.findings]
+        database.save_baseline(
+            "exposure",
+            "accepted",
+            {"created_at": report.started_at.isoformat(), "finding_ids": ids},
+        )
+        if as_json:
+            emit_json({"accepted_findings": len(ids)})
+        else:
+            console.print(
+                f"Accepted {len(ids)} current finding(s) as known posture. Later scans report "
+                "only new exposure in the posture score and never re-alert accepted findings."
+            )
+        return 0
+    promoted = record_report(database, report, rules, settings)
+    if as_json:
+        emit_json(report.as_dict() | {"promoted_to_incidents": promoted})
+    else:
+        console.print(render_exposure(report, report.findings, severity=level, rule=rule))
+    return 0

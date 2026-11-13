@@ -120,6 +120,40 @@ class IntegritySettings(ModuleSettings):
     max_file_bytes: int = Field(default=256 * 1024 * 1024, ge=0)
 
 
+class ExposureSettings(ModuleSettings):
+    """Attack surface and exposure analysis; see docs/security/EXPOSURE.md."""
+
+    interval_seconds: float = Field(default=900, ge=10, le=86400)
+    suid_paths: list[str] = Field(
+        default_factory=lambda: [
+            "/usr/bin",
+            "/usr/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/lib",
+            "/usr/libexec",
+            "/opt",
+        ]
+    )
+    suid_max_depth: int = Field(default=3, ge=1, le=16)
+    full_scan_every: int = Field(default=4, ge=1)  # every Nth scan re-walks everything
+    expected_suid: list[str] = Field(
+        default_factory=lambda: [
+            "passwd", "sudo", "su", "mount", "umount", "chsh", "chfn", "newgrp", "gpasswd",
+            "pkexec", "fusermount", "fusermount3", "ssh-keysign", "dbus-daemon-launch-helper",
+            "polkit-agent-helper-1", "unix_chkpwd", "pam_extrausers_chkpwd", "chage", "expiry",
+            "crontab", "at", "Xorg.wrap", "snap-confine", "ntfs-3g", "pppd", "mount.nfs",
+            "ssh-agent", "write", "wall", "bsd-write", "dotlockfile", "plocate", "utempter",
+            "chrome-sandbox", "opera_sandbox", "camel-lock-helper-1.2", "w3mimgdisplay",
+            "mtr-packet", "ping", "traceroute6.iputils", "arping", "clockdiff",
+        ]
+    )  # fmt: skip
+    expected_listen_ports: list[int] = Field(default_factory=lambda: [22, 53, 631])
+    weights: dict[str, float] = Field(
+        default_factory=lambda: {"CRITICAL": 40.0, "HIGH": 15.0, "MEDIUM": 5.0, "LOW": 0.5}
+    )
+
+
 class SecuritySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     promote_min_severity: Severity = Severity.MEDIUM  # findings below stay out of incidents
@@ -127,6 +161,7 @@ class SecuritySettings(BaseModel):
     network: NetworkSettings = Field(default_factory=NetworkSettings)
     anomaly: AnomalySettings = Field(default_factory=AnomalySettings)
     integrity: IntegritySettings = Field(default_factory=IntegritySettings)
+    exposure: ExposureSettings = Field(default_factory=ExposureSettings)
 
 
 class Settings(BaseModel):
