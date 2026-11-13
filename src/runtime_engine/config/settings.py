@@ -81,11 +81,28 @@ class NetworkSettings(ModuleSettings):
     repeat_window_seconds: float = Field(default=600, gt=0)
 
 
+class AnomalySettings(ModuleSettings):
+    """Unsupervised process anomaly scoring; see docs/security/ANOMALY.md."""
+
+    interval_seconds: float = Field(default=30, ge=5, le=86400)
+    model_directory: str = "models/anomaly"
+    algorithm: str = Field(default="auto", pattern="^(auto|iforest|robust)$")
+    n_estimators: int = Field(default=200, ge=10, le=2000)
+    random_state: int = 42
+    threshold_quantile: float = Field(default=0.99, gt=0.5, lt=1)
+    threshold_override: float | None = None
+    min_training_rows: int = Field(default=50, ge=10)
+    max_missing_fraction: float = Field(default=0.5, ge=0, le=1)
+    deviation_z: float = Field(default=3.0, gt=0)
+    exclude_names: list[str] = Field(default_factory=list)
+
+
 class SecuritySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     promote_min_severity: Severity = Severity.MEDIUM  # findings below stay out of incidents
     persistence: PersistenceSettings = Field(default_factory=PersistenceSettings)
     network: NetworkSettings = Field(default_factory=NetworkSettings)
+    anomaly: AnomalySettings = Field(default_factory=AnomalySettings)
 
 
 class Settings(BaseModel):

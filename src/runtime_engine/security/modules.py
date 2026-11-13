@@ -1,7 +1,8 @@
 """Build the enabled security modules from settings and persisted baselines."""
 
 from runtime_engine.config.settings import ModuleSettings, Settings
-from runtime_engine.security.findings import SeverityPolicy
+from runtime_engine.security.anomaly import AnomalyDetector
+from runtime_engine.security.findings import SecurityState, SeverityPolicy
 from runtime_engine.security.network import NetworkMonitor
 from runtime_engine.security.persistence import PersistenceMonitor, entries_from_body
 from runtime_engine.security.scheduler import SecurityModule
@@ -28,7 +29,7 @@ def persistence_monitor(settings: Settings, database: Database) -> PersistenceMo
 
 
 def build_modules(
-    settings: Settings, database: Database
+    settings: Settings, database: Database, security: SecurityState | None = None
 ) -> tuple[list[SecurityModule], dict[str, str]]:
     """Returns (enabled modules, status for every module that is not running)."""
     modules: list[SecurityModule] = []
@@ -42,4 +43,18 @@ def build_modules(
         modules.append(NetworkMonitor(network, policy(settings, network)))
     else:
         off["network"] = "disabled in configuration"
+    anomaly = settings.security.anomaly
+    if anomaly.enabled:
+
+        def resources() -> dict[str, dict[str, int]] | None:
+            # Reuse the network module's descriptor scan instead of enumerating /proc again.
+            report = security.report("network") if security is not None else None
+            if report is None:
+                return None
+            value: dict[str, dict[str, int]] | None = report.summary.get("process_resources")
+            return value
+
+        modules.append(AnomalyDetector(anomaly, policy(settings, anomaly), resources))
+    else:
+        off["anomaly"] = "disabled in configuration"
     return modules, off

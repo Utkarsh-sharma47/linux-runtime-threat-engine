@@ -188,7 +188,7 @@ def run_monitor(
     pipeline = Pipeline(database, rules, settings.correlation_window_seconds)
     modules: list[SecurityModule] = []
     if options.security_modules:
-        modules, off = build_modules(settings, database)
+        modules, off = build_modules(settings, database, state.security)
         for name, reason in off.items():
             state.security.set_enabled(name, reason)
     session = MonitorSession(

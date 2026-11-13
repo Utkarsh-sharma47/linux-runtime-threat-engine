@@ -13,3 +13,5 @@ htmlcov/
 coverage.xml
 dist/
 *.egg-info/
+# Trained anomaly models (local artifacts, never committed)
+models/

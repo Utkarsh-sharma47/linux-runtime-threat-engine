@@ -1,22 +1,38 @@
 """CLI handlers for the security modules (non-interactive alternatives to the pages)."""
 
 import json
+import os
 import sys
+import tempfile
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
 from rich.table import Table
 
+from runtime_engine.collector.net_collector import NetCollector
 from runtime_engine.config.settings import Settings
 from runtime_engine.detection.rule_loader import Rule
 from runtime_engine.events.schema import Event
 from runtime_engine.pipeline import Pipeline
+from runtime_engine.security.anomaly import (
+    ProcessSampler,
+    load_model,
+    load_rows,
+    public_metadata,
+    rank,
+    save_model,
+    synthetic_rows,
+    train,
+)
 from runtime_engine.security.findings import ScanReport
 from runtime_engine.security.modules import persistence_monitor
 from runtime_engine.security.network import NetworkMonitor, analyze_series, demo_series
 from runtime_engine.security.persistence import PersistenceMonitor, entries_to_body
 from runtime_engine.storage.database import Database
+from runtime_engine.terminal.views.anomaly_view import model_panel, render_anomaly
 from runtime_engine.terminal.views.network_view import render_network
 from runtime_engine.terminal.views.persistence_view import render_persistence
 from runtime_engine.terminal.views.security_common import finding_detail
@@ -238,3 +254,206 @@ def render_stored_connections(events: list[Event], pid: int | None) -> Table:
     if not events:
         table.caption = "No stored connection events for this PID (run monitor to collect)."
     return table
+
+
+def known_incident_keys(database: Database) -> set[str]:
+    """Process identities with alerts or incidents; never used as 'normal' training data."""
+    keys = {a.process_key for a in database.all_alerts() if a.process_key}
+    for incident in database.incidents():
+        keys.update(incident.process_keys)
+        keys.update(incident.context_process_keys)
+    return keys
+
+
+def live_rows(
+    sampler: ProcessSampler,
+) -> tuple[dict[str, dict[str, float | None]], dict[str, tuple[int, str]]]:
+    snapshot = NetCollector().snapshot()
+    resources = {
+        key: {"fds": snapshot.fd_counts[key], "sockets": snapshot.socket_counts.get(key, 0)}
+        for key in snapshot.fd_counts
+    }
+    samples, _ = sampler.samples()
+    return sampler.features(samples, resources), {s.key: (s.pid, s.name) for s in samples}
+
+
+def anomaly_command(
+    database: Database,
+    settings: Settings,
+    console: Console,
+    action: str,
+    *,
+    as_json: bool = False,
+    dataset: Path | None = None,
+    algorithm: str | None = None,
+    reviewed: bool = False,
+    model_dir: Path | None = None,
+    pid: int | None = None,
+    top: int = 15,
+    duration: float = 60,
+    interval: float = 10,
+    output: Path | None = None,
+) -> int:
+    config = settings.security.anomaly
+    directory = model_dir or Path(config.model_directory)
+    if action == "demo":
+        return anomaly_demo(console, config, model_dir, as_json, output)
+    if action == "collect":
+        if output is None:
+            raise ValueError("anomaly collect needs --output FILE")
+        return anomaly_collect(console, output, duration, interval)
+    if action == "train":
+        if dataset is None:
+            raise ValueError("anomaly train needs --dataset FILE")
+        rows = load_rows(dataset)
+        unverified = [r for r in rows if r.get("source") != "synthetic"]
+        if unverified and not reviewed:
+            print(
+                f"error: {len(unverified)} row(s) were collected from a live host. Active "
+                "processes are not a verified clean baseline: review the dataset, then rerun "
+                "with --i-reviewed-baseline.",
+                file=sys.stderr,
+            )
+            return 2
+        assertion = (
+            "synthetic demonstration data"
+            if not unverified
+            else "host-collected; operator asserted it was reviewed (not independently verified)"
+        )
+        trained = train(
+            rows,
+            config,
+            dataset=str(dataset),
+            excluded_keys=known_incident_keys(database),
+            algorithm=algorithm,
+            assertion=assertion,
+        )
+        path = save_model(trained, directory)
+        database.save_baseline(
+            "anomaly",
+            "model",
+            public_metadata(trained.metadata) | {"created_at": trained.metadata["trained_at"]},
+        )
+        if as_json:
+            emit_json(public_metadata(trained.metadata) | {"metadata_path": str(path)})
+        else:
+            console.print(model_panel(public_metadata(trained.metadata)))
+            console.print(f"Model saved to {directory} (metadata {path.name}).")
+        return 0
+    trained_model = load_model(directory)
+    if trained_model is None:
+        if action == "status":
+            if as_json:
+                emit_json({"model": None, "model_directory": str(directory)})
+            else:
+                console.print(model_panel(None))
+            return 0
+        print("error: no trained model; run anomaly train or anomaly demo", file=sys.stderr)
+        return 3
+    meta = public_metadata(trained_model.metadata)
+    if action == "status":
+        if as_json:
+            emit_json(meta | {"model_directory": str(directory)})
+        else:
+            console.print(model_panel(meta))
+        return 0
+    if action == "score":
+        if dataset is None:
+            raise ValueError("anomaly score needs --dataset FILE")
+        rows_in = load_rows(dataset)
+        features = {str(i): r["features"] for i, r in enumerate(rows_in)}
+        names = {
+            str(i): (int(r.get("pid") or 0), str(r.get("process", f"row-{i}")))
+            for i, r in enumerate(rows_in)
+        }
+    else:  # inspect: score the live host now
+        features, names = live_rows(ProcessSampler())
+        if pid is not None:
+            keep = [k for k, (p, _) in names.items() if p == pid]
+            if not keep:
+                raise KeyError(pid)
+            features = {k: features[k] for k in keep}
+    ranking = rank(trained_model, features, names, config.deviation_z)
+    if as_json:
+        emit_json({"model": meta, "ranking": ranking[:top]})
+    else:
+        console.print(
+            render_anomaly(None, [], model=meta, ranking=ranking[:top], sampled=len(ranking))
+        )
+    return 0
+
+
+def anomaly_demo(
+    console: Console, config: Any, model_dir: Path | None, as_json: bool, output: Path | None
+) -> int:
+    """Train on synthetic baseline rows and rank synthetic observed rows (no host data)."""
+    baseline, observed = synthetic_rows()
+    if output is not None:
+        output.mkdir(parents=True, exist_ok=True)
+        for name, rows in (("baseline.jsonl", baseline), ("observed.jsonl", observed)):
+            (output / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+    trained = train(
+        baseline,
+        config,
+        dataset="synthetic demonstration baseline (600 rows)",
+        assertion="synthetic demonstration data",
+    )
+    with tempfile.TemporaryDirectory() as scratch:
+        save_model(trained, model_dir or Path(scratch))
+        reloaded = load_model(model_dir or Path(scratch))
+    assert reloaded is not None
+    features = {str(i): r["features"] for i, r in enumerate(observed)}
+    names = {str(i): (r["pid"], r["process"]) for i, r in enumerate(observed)}
+    ranking = rank(reloaded, features, names, config.deviation_z)
+    injected = {r["process"] for r in observed if r["label"] == "anomaly"}
+    flagged = {r["process"] for r in ranking if r["above_threshold"]}
+    model = public_metadata(reloaded.metadata)
+    result: dict[str, Any] = {
+        "model": model,
+        "injected_outliers": sorted(injected),
+        "flagged": sorted(flagged),
+        "injected_found": sorted(injected & flagged),
+        "normal_rows_flagged": sorted(flagged - injected),
+        "ranking": ranking[:10],
+    }
+    if as_json:
+        emit_json(result)
+        return 0
+    console.print(render_anomaly(None, [], model=model, ranking=ranking[:12], sampled=len(ranking)))
+    console.print(
+        f"Synthetic check: {len(result['injected_found'])}/{len(injected)} injected outliers "
+        f"flagged; {len(result['normal_rows_flagged'])} normal row(s) flagged."
+    )
+    return 0
+
+
+def anomaly_collect(console: Console, output: Path, duration: float, interval: float) -> int:
+    """Write host feature rows for later review; they are NOT a verified clean baseline."""
+    sampler = ProcessSampler()
+    rows: dict[str, dict[str, Any]] = {}
+    deadline = time.monotonic() + duration
+    while True:
+        features, names = live_rows(sampler)
+        stamp = datetime.now(UTC).isoformat()
+        for key, values in features.items():
+            pid, name = names[key]
+            rows[key] = {
+                "process": name,
+                "pid": pid,
+                "process_key": key,
+                "source": "host-collected",
+                "collected_at": stamp,
+                "features": values,
+            }
+        if time.monotonic() + interval > deadline:
+            break
+        time.sleep(interval)
+    descriptor = os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        for row in rows.values():
+            stream.write(json.dumps(row) + "\n")
+    console.print(
+        f"Wrote {len(rows)} process rows to {output}. Review them (remove anything "
+        "unexpected) before training with --i-reviewed-baseline."
+    )
+    return 0
