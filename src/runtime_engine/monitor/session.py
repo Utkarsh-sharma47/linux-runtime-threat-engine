@@ -230,7 +230,7 @@ class MonitorSession:
                     promoted = self.pipeline.process_finding(item)
                     self.state.security.record_finding(item)
                     if promoted is not None:
-                        self.state.apply(promoted)
+                        self.state.apply(promoted, counted=False)
                 else:
                     self.state.apply(self.pipeline.process(item), baseline)
                 self.state.record_queue_depth(self.events.qsize())

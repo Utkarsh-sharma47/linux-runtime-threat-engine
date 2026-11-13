@@ -422,8 +422,12 @@ class DashboardState:
                 Verbosity.DEBUG,
             )
 
-    def apply(self, result: ProcessResult, baseline: bool = False) -> None:
-        """Mirror one pipeline result. Called only from the pipeline thread."""
+    def apply(self, result: ProcessResult, baseline: bool = False, *, counted: bool = True) -> None:
+        """Mirror one pipeline result. Called only from the pipeline thread.
+
+        `counted=False` is for promoted security findings: they never entered the event queue
+        as accepted collector events, so they must not change the event counters.
+        """
         now = self.clock()
         with self.lock:
             event = result.event
@@ -447,8 +451,9 @@ class DashboardState:
                     event_id=event.event_id,
                 )
                 return
-            self.counters.processed += 1
-            self._observe_latency(result.latency_seconds)
+            if counted:
+                self.counters.processed += 1
+                self._observe_latency(result.latency_seconds)
             if self.latest_event_time is None or event.timestamp > self.latest_event_time:
                 self.latest_event_time = event.timestamp
             for alert in result.alerts:

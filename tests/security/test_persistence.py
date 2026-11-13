@@ -332,6 +332,8 @@ def test_session_processes_findings_and_stops_cleanly(database):
     assert "boom" in state.security.report("network").error
     assert state.security.recent("persistence")[0].finding_id == finding().finding_id
     assert state.counters.observed == state.counters.accepted == 0
+    assert state.counters.processed == 0  # the promoted finding is not a collector event
+    assert len(state.alerts) == 1  # but it still reaches alerts and incidents
     assert session.submit_finding(finding()) is False  # stopped: nothing new accepted
 
 
