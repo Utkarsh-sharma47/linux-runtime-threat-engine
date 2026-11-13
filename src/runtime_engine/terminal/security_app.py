@@ -4,9 +4,11 @@ import json
 import os
 import secrets
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,8 +20,9 @@ from rich.table import Table
 from runtime_engine.collector.net_collector import NetCollector
 from runtime_engine.config.settings import Settings
 from runtime_engine.detection.rule_loader import Rule
-from runtime_engine.events.schema import Event
+from runtime_engine.events.schema import Event, Severity
 from runtime_engine.pipeline import Pipeline
+from runtime_engine.security import ransomware_sim
 from runtime_engine.security.anomaly import (
     ProcessSampler,
     load_model,
@@ -30,6 +33,7 @@ from runtime_engine.security.anomaly import (
     synthetic_rows,
     train,
 )
+from runtime_engine.security.exposure import ExposureAnalyzer
 from runtime_engine.security.findings import Finding, ScanReport
 from runtime_engine.security.integrity import (
     FINDING_RULES,
@@ -47,11 +51,14 @@ from runtime_engine.security.integrity import demo as integrity_demo
 from runtime_engine.security.modules import persistence_monitor, policy
 from runtime_engine.security.network import NetworkMonitor, analyze_series, demo_series
 from runtime_engine.security.persistence import PersistenceMonitor, entries_to_body
+from runtime_engine.security.ransomware import RansomwareMonitor
 from runtime_engine.storage.database import Database
 from runtime_engine.terminal.views.anomaly_view import model_panel, render_anomaly
+from runtime_engine.terminal.views.exposure_view import render_exposure
 from runtime_engine.terminal.views.integrity_view import render_integrity, render_proof
 from runtime_engine.terminal.views.network_view import render_network
 from runtime_engine.terminal.views.persistence_view import render_persistence
+from runtime_engine.terminal.views.ransomware_view import render_ransomware
 from runtime_engine.terminal.views.security_common import finding_detail
 
 BASELINE_WARNING = (
@@ -666,3 +673,201 @@ def render_demo(result: dict[str, Any]) -> Panel:
     return Panel(
         grid, title="FILE INTEGRITY DEMONSTRATION (temporary files only)", title_align="left"
     )
+
+
+def exposure_analyzer(settings: Settings, database: Database) -> ExposureAnalyzer:
+    config = settings.security.exposure
+    accepted = database.baseline("exposure", "accepted") or {}
+    return ExposureAnalyzer(config, policy(settings, config), set(accepted.get("finding_ids", [])))
+
+
+def exposure_command(
+    database: Database,
+    settings: Settings,
+    rules: list[Rule],
+    console: Console,
+    action: str,
+    *,
+    as_json: bool = False,
+    incremental: bool = False,
+    severity: str | None = None,
+    rule: str | None = None,
+    finding_id: str | None = None,
+) -> int:
+    level = Severity(severity.upper()) if severity else None
+    if action == "show" or finding_id:
+        if not finding_id:
+            raise ValueError("exposure show needs --id FINDING")
+        return show_finding(database, console, finding_id, as_json)
+    if action == "report":
+        report = last_report(database, "exposure")
+        if report is None:
+            print("error: no exposure scan recorded; run: exposure scan", file=sys.stderr)
+            return 3
+        if as_json:
+            emit_json(report.as_dict())
+        else:
+            console.print(render_exposure(report, report.findings, severity=level, rule=rule))
+        return 0
+    analyzer = exposure_analyzer(settings, database)
+    state = database.baseline("exposure", "scan-state")
+    if incremental and state:
+        analyzer.known_dirs = dict(state["known_dirs"])
+        analyzer.known_privileged = set(state["known_privileged"])
+        analyzer.scans = 1  # resume: not the first scan, so the cached state is used
+    report = analyzer.scan(full=not (incremental and state))
+    database.save_baseline(
+        "exposure",
+        "scan-state",
+        {"created_at": report.started_at.isoformat(), "known_dirs": analyzer.known_dirs,
+         "known_privileged": sorted(analyzer.known_privileged)},
+    )  # fmt: skip
+    if action == "baseline":
+        ids = [f.finding_id for f in report.findings]
+        database.save_baseline(
+            "exposure",
+            "accepted",
+            {"created_at": report.started_at.isoformat(), "finding_ids": ids},
+        )
+        if as_json:
+            emit_json({"accepted_findings": len(ids)})
+        else:
+            console.print(
+                f"Accepted {len(ids)} current finding(s) as known posture. Later scans report "
+                "only new exposure in the posture score and never re-alert accepted findings."
+            )
+        return 0
+    promoted = record_report(database, report, rules, settings)
+    if as_json:
+        emit_json(report.as_dict() | {"promoted_to_incidents": promoted})
+    else:
+        console.print(render_exposure(report, report.findings, severity=level, rule=rule))
+    return 0
+
+
+def watch_directory(
+    monitor: RansomwareMonitor, duration: float, until: Callable[[], bool] | None = None
+) -> ScanReport:
+    """Scan until `duration` elapses (or `until()` is true); keep the strongest report."""
+    deadline = time.monotonic() + duration
+    best = monitor.scan()
+
+    def better(report: ScanReport) -> bool:
+        # Prefer an alerting report taken while candidate processes were still running.
+        if not report.findings:
+            return not best.findings
+        return (
+            not best.findings
+            or bool(report.summary.get("candidates"))
+            or not best.summary.get("candidates")
+        )
+
+    while time.monotonic() < deadline and not (until is not None and until()):
+        time.sleep(min(0.5, monitor.interval))
+        report = monitor.scan()
+        if better(report):
+            best = report
+    final = monitor.scan()
+    return final if better(final) and not best.summary.get("candidates") else best
+
+
+def ransomware_command(
+    database: Database,
+    settings: Settings,
+    rules: list[Rule],
+    console: Console,
+    action: str,
+    *,
+    as_json: bool = False,
+    lab_dir: str | None = None,
+    directory: str | None = None,
+    files: int = 30,
+    delay: float = 0.03,
+    duration: float = 30,
+    keep: bool = False,
+) -> int:
+    try:
+        return _ransomware(
+            database, settings, rules, console, action, as_json=as_json, lab_dir=lab_dir,
+            directory=directory, files=files, delay=delay, duration=duration, keep=keep,
+        )  # fmt: skip
+    except ransomware_sim.UnsafeLabError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+
+
+def _ransomware(
+    database: Database,
+    settings: Settings,
+    rules: list[Rule],
+    console: Console,
+    action: str,
+    *,
+    as_json: bool,
+    lab_dir: str | None,
+    directory: str | None,
+    files: int,
+    delay: float,
+    duration: float,
+    keep: bool,
+) -> int:
+    config = settings.security.ransomware
+    if action == "cleanup":
+        if not lab_dir:
+            raise ValueError("ransomware cleanup needs --lab-dir")
+        console.print(f"Removed {ransomware_sim.cleanup(lab_dir)} simulator file(s).")
+        return 0
+    if action == "simulate":
+        lab = ransomware_sim.create_lab(lab_dir)
+        result = ransomware_sim.simulate(lab, files, delay)
+        if as_json:
+            emit_json(result)
+        else:
+            console.print(
+                f"Simulated {files} file transformations in {lab}. Only simulator-created files "
+                f"were touched. Remove them with: ransomware cleanup --lab-dir {lab}"
+            )
+        return 0
+    if action == "report":
+        report = last_report(database, "ransomware")
+        findings = database.findings("ransomware")
+        if as_json:
+            emit_json({"last_report": report.as_dict() if report else None, "findings": findings})
+        else:
+            console.print(render_ransomware(report, findings))
+        return 0
+    if action == "watch":
+        if not directory:
+            raise ValueError("ransomware watch needs --dir DIRECTORY")
+        monitor = RansomwareMonitor(config, policy(settings, config), directories=[directory])
+        try:
+            report = watch_directory(monitor, duration)
+        finally:
+            monitor.close()
+    else:  # demo: lab + simulator subprocess + detector, then clean up
+        lab = ransomware_sim.create_lab(lab_dir)
+        monitor = RansomwareMonitor(config, policy(settings, config), directories=[str(lab)])
+        try:
+            simulator = subprocess.Popen(
+                [sys.executable, "-m", "runtime_engine.security.ransomware_sim", str(lab),
+                 "--files", str(files), "--delay", str(delay)],
+                cwd=lab, stdout=subprocess.DEVNULL,
+            )  # fmt: skip
+            report = watch_directory(monitor, 120, until=lambda: simulator.poll() is not None)
+            simulator.wait(30)
+        finally:
+            monitor.close()
+            if not keep:
+                ransomware_sim.cleanup(lab)
+        report.summary["lab"] = str(lab) + ("" if keep else " (removed)")
+    promoted = record_report(database, report, rules, settings)
+    if as_json:
+        emit_json(report.as_dict() | {"promoted_to_incidents": promoted})
+    else:
+        console.print(render_ransomware(report, report.findings))
+        if action == "demo":
+            console.print(
+                f"Lab {report.summary['lab']}: {files} simulator files were created, rewritten "
+                "with random bytes and renamed. No user files were touched."
+            )
+    return 0

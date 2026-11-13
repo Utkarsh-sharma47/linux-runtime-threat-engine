@@ -33,6 +33,7 @@ NOT_FOUND = {
     "network": "error: finding not found",
     "anomaly": "error: no live process with that PID",
     "integrity": "error: file not in the integrity tree",
+    "exposure": "error: finding not found",
     "process": "error: no stored process with that PID",
     "session": "error: session not found",
 }
@@ -201,6 +202,38 @@ def parser() -> argparse.ArgumentParser:
     integrity.add_argument("--output", type=Path, help="Key file to create (keygen)")
     integrity.add_argument("--keep", action="store_true", help="Keep the demo directory")
     integrity.add_argument("--json", action="store_true")
+    exposure = sub.add_parser(
+        "exposure",
+        help="Attack surface analysis: scan, report, baseline, show",
+        description="Read-only posture checks: SUID/SGID, capabilities, writable PATH dirs, "
+        "sensitive file permissions, root listening services, root units, suspicious process "
+        "locations and sudoers patterns (when readable). baseline accepts current findings "
+        "as known posture. Nothing on the host is modified.",
+    )
+    exposure.add_argument("action", choices=["scan", "report", "baseline", "show"])
+    exposure.add_argument(
+        "--incremental", action="store_true", help="Reuse the saved scan state (scan only)"
+    )
+    exposure.add_argument("--severity", choices=["low", "medium", "high", "critical"])
+    exposure.add_argument("--rule", help="Only one rule, e.g. EX001")
+    exposure.add_argument("--id", dest="finding_id", help="Finding to show")
+    exposure.add_argument("--json", action="store_true")
+    ransomware = sub.add_parser(
+        "ransomware",
+        help="Ransomware early warning: demo, simulate, watch, report, cleanup",
+        description="Behavioural detection (modification and rename rates, affected files, "
+        "entropy rises, extension changes) on explicitly chosen directories. demo and "
+        "simulate only touch files they create in a dedicated lab under the system temp "
+        "directory; no real encryption or user data is involved.",
+    )
+    ransomware.add_argument("action", choices=["demo", "simulate", "watch", "report", "cleanup"])
+    ransomware.add_argument("--lab-dir", help="Lab directory (must be <tmp>/rte-ransomware-lab*)")
+    ransomware.add_argument("--dir", dest="directory", help="Directory to watch (watch)")
+    ransomware.add_argument("--files", type=int, default=30)
+    ransomware.add_argument("--delay", type=float, default=0.03)
+    ransomware.add_argument("--duration", type=positive, default=30)
+    ransomware.add_argument("--keep", action="store_true", help="Keep the demo lab files")
+    ransomware.add_argument("--json", action="store_true")
     return result
 
 
@@ -300,6 +333,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=args.file,
                 use_baseline=args.use_baseline,
                 output=args.output,
+                keep=args.keep,
+            )
+        if args.command == "exposure":
+            return security_app.exposure_command(
+                database,
+                settings,
+                rules,
+                console,
+                args.action,
+                as_json=args.json,
+                incremental=args.incremental,
+                severity=args.severity,
+                rule=args.rule,
+                finding_id=args.finding_id,
+            )
+        if args.command == "ransomware":
+            return security_app.ransomware_command(
+                database,
+                settings,
+                rules,
+                console,
+                args.action,
+                as_json=args.json,
+                lab_dir=args.lab_dir,
+                directory=args.directory,
+                files=args.files,
+                delay=args.delay,
+                duration=args.duration,
                 keep=args.keep,
             )
         if args.command == "incidents":

@@ -120,6 +120,64 @@ class IntegritySettings(ModuleSettings):
     max_file_bytes: int = Field(default=256 * 1024 * 1024, ge=0)
 
 
+class ExposureSettings(ModuleSettings):
+    """Attack surface and exposure analysis; see docs/security/EXPOSURE.md."""
+
+    interval_seconds: float = Field(default=900, ge=10, le=86400)
+    suid_paths: list[str] = Field(
+        default_factory=lambda: [
+            "/usr/bin",
+            "/usr/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/lib",
+            "/usr/libexec",
+            "/opt",
+        ]
+    )
+    suid_max_depth: int = Field(default=3, ge=1, le=16)
+    full_scan_every: int = Field(default=4, ge=1)  # every Nth scan re-walks everything
+    expected_suid: list[str] = Field(
+        default_factory=lambda: [
+            "passwd", "sudo", "su", "mount", "umount", "chsh", "chfn", "newgrp", "gpasswd",
+            "pkexec", "fusermount", "fusermount3", "ssh-keysign", "dbus-daemon-launch-helper",
+            "polkit-agent-helper-1", "unix_chkpwd", "pam_extrausers_chkpwd", "chage", "expiry",
+            "crontab", "at", "Xorg.wrap", "snap-confine", "ntfs-3g", "pppd", "mount.nfs",
+            "ssh-agent", "write", "wall", "bsd-write", "dotlockfile", "plocate", "utempter",
+            "chrome-sandbox", "opera_sandbox", "camel-lock-helper-1.2", "w3mimgdisplay",
+            "mtr-packet", "ping", "traceroute6.iputils", "arping", "clockdiff",
+        ]
+    )  # fmt: skip
+    expected_listen_ports: list[int] = Field(default_factory=lambda: [22, 53, 631])
+    weights: dict[str, float] = Field(
+        default_factory=lambda: {"CRITICAL": 40.0, "HIGH": 15.0, "MEDIUM": 5.0, "LOW": 0.5}
+    )
+
+
+class RansomwareSettings(ModuleSettings):
+    """Behavioural ransomware early warning; off until directories are configured."""
+
+    enabled: bool = True
+    interval_seconds: float = Field(default=2, ge=0.2, le=3600)
+    directories: list[str] = Field(default_factory=list)  # nothing personal by default
+    exclude: list[str] = Field(default_factory=lambda: ["*.swp", "*~", "*.tmp", ".git"])
+    max_watches: int = Field(default=2000, ge=1)
+    window_seconds: float = Field(default=30, gt=0)
+    max_events_per_window: int = Field(default=20_000, ge=100)
+    sample_bytes: int = Field(default=65536, ge=256, le=4 * 1024 * 1024)
+    entropy_reads_per_second: float = Field(default=50, gt=0)
+    high_entropy: float = Field(default=7.2, gt=0, le=8)
+    low_entropy: float = Field(default=6.0, gt=0, le=8)
+    modification_threshold: int = Field(default=30, ge=1)  # per window
+    rename_threshold: int = Field(default=15, ge=1)
+    files_threshold: int = Field(default=20, ge=1)
+    directories_threshold: int = Field(default=3, ge=1)
+    entropy_ratio_threshold: float = Field(default=0.5, gt=0, le=1)
+    extension_ratio_threshold: float = Field(default=0.6, gt=0, le=1)
+    alert_score: float = Field(default=50, gt=0, le=100)
+    min_indicators: int = Field(default=2, ge=1)
+
+
 class SecuritySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     promote_min_severity: Severity = Severity.MEDIUM  # findings below stay out of incidents
@@ -127,6 +185,8 @@ class SecuritySettings(BaseModel):
     network: NetworkSettings = Field(default_factory=NetworkSettings)
     anomaly: AnomalySettings = Field(default_factory=AnomalySettings)
     integrity: IntegritySettings = Field(default_factory=IntegritySettings)
+    exposure: ExposureSettings = Field(default_factory=ExposureSettings)
+    ransomware: RansomwareSettings = Field(default_factory=RansomwareSettings)
 
 
 class Settings(BaseModel):
