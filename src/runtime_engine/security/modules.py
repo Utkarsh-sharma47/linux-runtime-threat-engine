@@ -3,6 +3,7 @@
 from runtime_engine.config.settings import ModuleSettings, Settings
 from runtime_engine.security.anomaly import AnomalyDetector
 from runtime_engine.security.findings import SecurityState, SeverityPolicy
+from runtime_engine.security.integrity import IntegrityMonitor
 from runtime_engine.security.network import NetworkMonitor
 from runtime_engine.security.persistence import PersistenceMonitor, entries_from_body
 from runtime_engine.security.scheduler import SecurityModule
@@ -57,4 +58,11 @@ def build_modules(
         modules.append(AnomalyDetector(anomaly, policy(settings, anomaly), resources))
     else:
         off["anomaly"] = "disabled in configuration"
+    integrity = settings.security.integrity
+    if integrity.enabled:
+        modules.append(
+            IntegrityMonitor(integrity, database.baseline("integrity"), policy(settings, integrity))
+        )
+    else:
+        off["integrity"] = "disabled in configuration"
     return modules, off

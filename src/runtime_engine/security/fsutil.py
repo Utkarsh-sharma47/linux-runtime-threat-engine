@@ -138,14 +138,14 @@ class FileHasher:
         self.reads = 0
         self.bytes_read = 0
 
-    def digest(self, meta: FileMeta) -> tuple[str | None, str]:
+    def digest(self, meta: FileMeta, *, use_cache: bool = True) -> tuple[str | None, str]:
         """Returns (hex digest or None, status: hashed|cached|too-large|denied|not-a-file)."""
         if meta.kind != "file":
             return None, "not-a-file"
         if meta.size is not None and meta.size > self.max_bytes:
             return None, "too-large"
         key = (meta.path, meta.signature())
-        cached = self.cache.get(key)
+        cached = self.cache.get(key) if use_cache else None
         if cached is not None:
             self.cache.move_to_end(key)
             return cached, "cached"

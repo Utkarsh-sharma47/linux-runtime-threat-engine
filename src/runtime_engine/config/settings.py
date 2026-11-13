@@ -97,12 +97,36 @@ class AnomalySettings(ModuleSettings):
     exclude_names: list[str] = Field(default_factory=list)
 
 
+class IntegritySettings(ModuleSettings):
+    """Merkle-tree file integrity monitoring; see docs/security/INTEGRITY.md."""
+
+    interval_seconds: float = Field(default=300, ge=5, le=86400)
+    paths: list[str] = Field(
+        default_factory=lambda: [
+            "/etc/passwd",
+            "/etc/group",
+            "/etc/hosts",
+            "/etc/ssh/sshd_config",
+            "/etc/systemd/system",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+        ]
+    )
+    exclude: list[str] = Field(
+        default_factory=lambda: ["*.swp", "*~", "*.tmp", "*.pid", "*.lock", "*.log", "*.cache"]
+    )
+    max_depth: int = Field(default=8, ge=1, le=64)
+    max_files: int = Field(default=50_000, ge=1)
+    max_file_bytes: int = Field(default=256 * 1024 * 1024, ge=0)
+
+
 class SecuritySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     promote_min_severity: Severity = Severity.MEDIUM  # findings below stay out of incidents
     persistence: PersistenceSettings = Field(default_factory=PersistenceSettings)
     network: NetworkSettings = Field(default_factory=NetworkSettings)
     anomaly: AnomalySettings = Field(default_factory=AnomalySettings)
+    integrity: IntegritySettings = Field(default_factory=IntegritySettings)
 
 
 class Settings(BaseModel):
