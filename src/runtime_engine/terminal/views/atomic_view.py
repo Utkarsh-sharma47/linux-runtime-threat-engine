@@ -23,6 +23,15 @@ GRADE_STYLES = {
 }
 EXECUTION_STYLES = {"COMPLETED": "bold green", "FAILED": "bold red", "TIMEOUT": "bold red"}
 RISK_STYLES = {"A": "bold green", "B": "bold yellow", "C": "bold red"}
+DURING_ORDER = (
+    "process_events",
+    "exit_events",
+    "file_events",
+    "network_events",
+    "privilege_events",
+    "anomaly_samples",
+)
+DIFF_ORDER = ("persistence_changes", "integrity_changes", "new_exposure_findings", "new_listeners")
 GRADES = ("DETECTED", "PARTIALLY DETECTED", "NOT DETECTED", "INCONCLUSIVE", "EXECUTION FAILED")
 
 
@@ -182,13 +191,13 @@ def render_report(evaluation: dict[str, Any], record: dict[str, Any]) -> Rendera
     during, diff = coverage["captured_during_execution"], coverage["state_differences"]
     left = Text()
     left.append(f"collector: {coverage['collector']}\n", style="bold")
-    for key, value in during.items():
-        left.append(f"{key.replace('_', ' '):<20}{value:>6}\n")
+    for key in DURING_ORDER:
+        left.append(f"{key.replace('_', ' '):<20}{during.get(key, 0):>6}\n")
     right = Text()
     right.append(f"telemetry types: {', '.join(coverage['telemetry_types_available']) or 'none'}\n",
                  style="bold")  # fmt: skip
-    for key, value in diff.items():
-        right.append(f"{key.replace('_', ' '):<24}{value:>6}\n")
+    for key in DIFF_ORDER:
+        right.append(f"{key.replace('_', ' '):<24}{diff.get(key, 0):>6}\n")
     cov.add_row(left, right)
     parts.append(block("EVIDENCE COLLECTION", cov))
     results = Table(expand=True, title="DETECTION RESULTS BY COMPONENT", title_justify="left")
@@ -239,8 +248,10 @@ def render_report(evaluation: dict[str, Any], record: dict[str, Any]) -> Rendera
         table = Table(
             expand=True, title="PROCESS IDENTITY (test process tree)", title_justify="left"
         )
-        for column in ("PID", "PROCESS", "LINEAGE", "COMMAND"):
-            table.add_column(column, overflow="fold")
+        table.add_column("PID", justify="right", no_wrap=True)
+        table.add_column("PROCESS", no_wrap=True)
+        table.add_column("LINEAGE", overflow="fold", ratio=1)
+        table.add_column("COMMAND", overflow="fold", ratio=2)
         for item in processes[:15]:
             table.add_row(
                 str(item["pid"]),
