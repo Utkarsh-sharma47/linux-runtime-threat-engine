@@ -12,6 +12,7 @@ license = "MIT"
 dependencies = ["pydantic>=2.10,<3", "PyYAML>=6.0.2,<7", "rich>=13.7,<15"]
 
 [project.optional-dependencies]
+ml = ["scikit-learn>=1.4,<2"]
 dev = ["pytest>=8.3,<9", "pytest-cov>=6,<7", "ruff>=0.11,<0.12", "mypy>=1.15,<2", "types-PyYAML>=6,<7", "build>=1.2,<2"]
 
 [project.scripts]
@@ -35,3 +36,7 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.11"
 strict = true
 files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "joblib.*"]
+ignore_missing_imports = true

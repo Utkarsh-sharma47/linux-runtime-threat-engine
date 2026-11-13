@@ -31,6 +31,7 @@ and the session is saved; list saved sessions with the `sessions` command.
 NOT_FOUND = {
     "persistence": "error: finding not found",
     "network": "error: finding not found",
+    "anomaly": "error: no live process with that PID",
     "process": "error: no stored process with that PID",
     "session": "error: session not found",
 }
@@ -145,6 +146,32 @@ def parser() -> argparse.ArgumentParser:
     network.add_argument("--demo", action="store_true", help="Analyze synthetic timelines")
     network.add_argument("--id", dest="finding_id", help="Show one finding (with show)")
     network.add_argument("--json", action="store_true")
+    anomaly = sub.add_parser(
+        "anomaly",
+        help="Process anomaly detection: train, status, score, inspect, collect, demo",
+        description="Isolation Forest (scikit-learn, optional '.[ml]' extra) or a deterministic "
+        "robust z-score fallback. train: fit a reviewed baseline dataset; score: rank a "
+        "dataset; inspect: score live processes now; collect: write host rows for review; "
+        "demo: synthetic baseline and injected outliers. Scores are not malware probabilities.",
+    )
+    anomaly.add_argument(
+        "action", choices=["train", "status", "score", "inspect", "collect", "demo"]
+    )
+    anomaly.add_argument("--dataset", type=Path, help="JSONL rows with a 'features' object")
+    anomaly.add_argument("--algorithm", choices=["auto", "iforest", "robust"])
+    anomaly.add_argument(
+        "--i-reviewed-baseline",
+        dest="reviewed",
+        action="store_true",
+        help="Confirm a host-collected dataset was reviewed before training",
+    )
+    anomaly.add_argument("--model-dir", type=Path)
+    anomaly.add_argument("--pid", type=int)
+    anomaly.add_argument("--top", type=int, default=15)
+    anomaly.add_argument("--duration", type=positive, default=60)
+    anomaly.add_argument("--interval", type=positive, default=10)
+    anomaly.add_argument("--output", type=Path)
+    anomaly.add_argument("--json", action="store_true")
     return result
 
 
@@ -210,6 +237,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 finding_id=args.finding_id,
                 input_path=args.input,
                 demo=args.demo,
+            )
+        if args.command == "anomaly":
+            return security_app.anomaly_command(
+                database,
+                settings,
+                console,
+                args.action,
+                as_json=args.json,
+                dataset=args.dataset,
+                algorithm=args.algorithm,
+                reviewed=args.reviewed,
+                model_dir=args.model_dir,
+                pid=args.pid,
+                top=args.top,
+                duration=args.duration,
+                interval=args.interval,
+                output=args.output,
             )
         if args.command == "incidents":
             print(
