@@ -1,0 +1,50 @@
+# Curated expectation profiles used to grade Atomic test reports.
+#
+# Each profile states what the CURRENT engine should observe for one Atomic test,
+# derived from the test's actual commands (Invoke-AtomicTest -ShowDetails) and the
+# engine's actual collectors and rules. A test without a profile is always graded
+# INCONCLUSIVE: add a reviewed profile before drawing conclusions.
+#
+#   key_processes   process names (kernel comm, max 15 chars) that carry the behaviour
+#   expected_rules  engine rule IDs that should match; [] = no current rule covers it
+#   telemetry       event types required; the live collector provides PROCESS_START only
+#   cleanup_paths   paths that must not exist after cleanup (checked by verify_cleanup.sh)
+
+a315bfff-7a98-403b-b442-2ea1b255e556:
+  technique: T1036.003
+  name: Masquerading as FreeBSD or Linux crond process.
+  key_processes: [crond]
+  expected_rules: [RT002]
+  telemetry: [PROCESS_START]
+  cleanup_paths: [/tmp/crond]
+  rationale: >-
+    The test copies /bin/sh to /tmp/crond and pipes 'sleep 5' into it. dash reading a
+    script from stdin stays alive as the parent of sleep for about 5 s, so a 2 s /proc
+    poll should see a process named crond whose executable is /tmp/crond, which RT002
+    (execution from a temporary location) matches. The cp file write itself is not
+    collected live.
+
+b04ed73c-7d43-4dc8-b563-a2fc595cba1a:
+  technique: T1059.004
+  name: Command line scripts
+  key_processes: [sh]
+  expected_rules: []
+  telemetry: [PROCESS_START]
+  cleanup_paths: []
+  rationale: >-
+    A 5 s shell loop (sh -c 'for ...; sleep 1') started by Invoke-AtomicTest. The
+    executor sh should be observed as a child of the runner. No current rule targets a
+    benign shell loop, so the expected grade is NOT DETECTED (rule coverage gap) once
+    the process is observed; this test validates telemetry and attribution.
+
+2a9b677d-a230-44f4-ad86-782df1ef108c:
+  technique: T1033
+  name: System Owner/User Discovery
+  key_processes: [users, w, who]
+  expected_rules: []
+  telemetry: [PROCESS_START]
+  cleanup_paths: []
+  rationale: >-
+    users, w and who each exit within milliseconds. A 2 s /proc poll will usually miss
+    them, so the expected grade is INCONCLUSIVE (telemetry gap), which demonstrates the
+    polling limitation rather than a detection.

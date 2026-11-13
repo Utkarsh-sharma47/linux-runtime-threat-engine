@@ -510,6 +510,8 @@ hosted CI has run. The workflow tests Linux on Python 3.11 and 3.13.
 - [Development guide](docs/DEVELOPMENT.md)
 - [Original requested requirements](docs/REQUIREMENTS.md)
 - [Contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md)
+- [Atomic Red Team test lab](testing/atomic-red-team/README.md): run one reviewed
+  Atomic test while monitoring and grade what the engine observed
 
 Roadmap: an authorized audit-event collector, optional eBPF adapter, bounded caches
 and retention, persistent cross-session correlation, richer allowlists and resource
