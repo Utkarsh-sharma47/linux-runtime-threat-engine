@@ -123,6 +123,51 @@ Sessions are stored in `monitor_sessions` (ID, start time, JSON summary) at star
 status `RUNNING` and replaced at the end. The summary holds counts and measurements,
 not telemetry.
 
+## Security modules
+
+`security/` holds six modules behind one small protocol: a `name`, an `interval` and a
+`scan()` that returns a `ScanReport` (status, `Coverage`, `Finding`s, a summary and optional
+telemetry `events`). `security/modules.py` builds the enabled modules from
+`Settings.security` and reports why each disabled module is off.
+
+```text
+module threads (SecurityScheduler, one daemon thread per module)
+   | scan() every interval -> ScanReport
+   |-- report -----------------------------> SecurityState (latest report per module,
+   |                                           bounded recent findings; read by the terminal)
+   |-- events (network socket snapshots) --> bounded queue (same as collector events)
+   '-- findings ---------------------------> bounded queue --> Pipeline.process_finding
+                                                              |- store in security_findings
+                                                              '- if promoted and a new revision:
+                                                                 SECURITY_FINDING event + Alert
+                                                                 -> existing correlation
+```
+
+- **Findings.** `Finding.create(module, rule, resource, ...)` derives a stable ID from
+  `(module, rule, resource)`; the revision is a hash of the evidence that matters, so a
+  repeated scan refreshes `last_seen` instead of creating duplicates. `SeverityPolicy`
+  applies allowlists (`glob` or `RULE:glob`), severity overrides and the promotion
+  threshold (`security.promote_min_severity`, default MEDIUM). Only a new revision of a
+  promoted finding produces a pipeline event (`finding:{id}:{revision}`), so correlation
+  sees each change once.
+- **Coverage.** Every report lists checked items, permission-denied paths and
+  unavailable telemetry. A scan that failed is status `error`, never "no findings".
+- **Storage.** `security_findings` (queryable columns plus the JSON body, first/last
+  seen, occurrences) and `security_baselines` (module, name, JSON body) live in the same
+  SQLite database. Baselines, accepted exposure findings and the last report of each
+  standalone command are stored there.
+- **Queue and shutdown.** Findings share the bounded queue with collector events and
+  are rejected once a stop is requested. Promoted findings update alerts, incidents and
+  processes but not the event counters, because they were never accepted collector
+  events. On stop, the processor waits until the module threads have exited or a 5 s
+  grace period has passed; `shutdown()` then reports scans that were still running as
+  abandoned.
+- **Terminal.** The dashboard header shows a one-line module status from cached reports;
+  the `s` page lists the modules and opens per-module pages built from the same view
+  functions as the standalone commands. Nothing in the terminal triggers a scan.
+- **Independence.** The ransomware detector (file behaviour) and the exposure analyzer
+  (configuration) share only the finding/coverage types and filesystem helpers.
+
 ## Metrics
 
 Metrics are per completed CLI session and persisted as separate snapshots. Rule-match

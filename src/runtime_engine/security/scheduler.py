@@ -77,6 +77,9 @@ class SecurityScheduler:
             if self.stop.wait(module.interval):
                 return
 
+    def finished(self) -> bool:
+        return not any(thread.is_alive() for thread in self.threads)
+
     def join(self, timeout: float = 5.0) -> list[str]:
         """Join module threads; returns modules still scanning after the timeout."""
         deadline = time.monotonic() + timeout

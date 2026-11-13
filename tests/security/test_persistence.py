@@ -332,7 +332,45 @@ def test_session_processes_findings_and_stops_cleanly(database):
     assert "boom" in state.security.report("network").error
     assert state.security.recent("persistence")[0].finding_id == finding().finding_id
     assert state.counters.observed == state.counters.accepted == 0
+    assert state.counters.processed == 0  # the promoted finding is not a collector event
+    assert len(state.alerts) == 1  # but it still reaches alerts and incidents
     assert session.submit_finding(finding()) is False  # stopped: nothing new accepted
+
+
+class HangingModule(FakeModule):
+    def __init__(self):
+        super().__init__("exposure")
+        self.release = threading.Event()
+
+    def scan(self):
+        self.release.wait(10)  # a long scan still running when the user stops
+        return super().scan()
+
+
+@pytest.mark.parametrize("hanging", [False, True])
+def test_processor_drains_without_shutdown_when_modules_run(database, monkeypatch, hanging):
+    # The interactive dashboard waits for the processor before calling shutdown().
+    monkeypatch.setattr("runtime_engine.monitor.session.SECURITY_GRACE", 0.3)
+    state = DashboardState(make_info())
+    module = HangingModule() if hanging else FakeModule("persistence", [finding()])
+    session = MonitorSession(
+        Pipeline(database, load_rules()),
+        Idle(),
+        state,
+        poll_interval=0.05,
+        queue_capacity=10,
+        security_modules=[module],
+    )
+    session.start()
+    time.sleep(0.2)
+    session.begin_stop("user_quit")
+    try:
+        assert session.processor_done.wait(3), "processor waited for shutdown() forever"
+    finally:
+        if hanging:
+            module.release.set()
+    result = session.shutdown("user_quit")
+    assert result.status == "STOPPED_GRACEFULLY" and result.unprocessed == 0
 
 
 def test_finding_submission_respects_queue_pressure(database):

@@ -23,6 +23,8 @@ from runtime_engine.pipeline import Pipeline
 from runtime_engine.security.findings import Finding
 from runtime_engine.security.scheduler import SecurityModule, SecurityScheduler
 
+SECURITY_GRACE = 5.0  # seconds a running scan may take to finish after a stop request
+
 
 class SnapshotCollector(Protocol):
     errors: int
@@ -68,6 +70,7 @@ class MonitorSession:
         self.collector_done = threading.Event()
         self.processor_done = threading.Event()
         self.security_done = threading.Event()
+        self._stop_at: float | None = None
         self.scheduler = (
             SecurityScheduler(
                 security_modules,
@@ -119,6 +122,8 @@ class MonitorSession:
             if self.reason is None:
                 self.reason = reason
                 self.state.stop_reason = reason
+            if self._stop_at is None:
+                self._stop_at = time.monotonic()
         self.stop_requested.set()
 
     def wait(self, timeout: float) -> bool:
@@ -221,7 +226,7 @@ class MonitorSession:
                 except queue.Empty:
                     if (
                         self.collector_done.is_set()
-                        and self.security_done.is_set()
+                        and self._security_settled()
                         and self.events.empty()
                     ):
                         break
@@ -230,7 +235,7 @@ class MonitorSession:
                     promoted = self.pipeline.process_finding(item)
                     self.state.security.record_finding(item)
                     if promoted is not None:
-                        self.state.apply(promoted)
+                        self.state.apply(promoted, counted=False)
                 else:
                     self.state.apply(self.pipeline.process(item), baseline)
                 self.state.record_queue_depth(self.events.qsize())
@@ -239,6 +244,22 @@ class MonitorSession:
             self._fail(f"pipeline failure: {type(exc).__name__}")
         finally:
             self.processor_done.set()
+
+    def _security_settled(self) -> bool:
+        """Module threads have exited, or the stop grace period is over.
+
+        The interactive drain waits for the processor before `shutdown()` runs, so the
+        processor cannot rely on `shutdown()` to set `security_done`. Findings submitted
+        after the stop request are rejected, so nothing can enter the queue afterwards.
+        """
+        if self.security_done.is_set():
+            return True
+        if self.scheduler is None or self._stop_at is None:
+            return False
+        if self.scheduler.finished() or time.monotonic() - self._stop_at >= SECURITY_GRACE:
+            self.security_done.set()
+            return True
+        return False
 
     def _join(self, thread: threading.Thread) -> None:
         while thread.is_alive():
@@ -272,7 +293,7 @@ class MonitorSession:
         self._join(self._collector_thread)
         if self.scheduler is not None:
             # Running scans finish or are abandoned; their findings are no longer accepted.
-            self.abandoned_scans = self.scheduler.join(timeout=5.0)
+            self.abandoned_scans = self.scheduler.join(timeout=SECURITY_GRACE)
         self.security_done.set()
         self._join(self._processor_thread)
         self._sync_collector()

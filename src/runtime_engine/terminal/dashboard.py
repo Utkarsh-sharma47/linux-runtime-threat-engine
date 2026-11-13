@@ -25,6 +25,7 @@ from runtime_engine.terminal.formatting import (
     severity_text,
 )
 from runtime_engine.terminal.live_logs import entry_text, log_panel
+from runtime_engine.terminal.views.security_view import any_enabled, status_line
 
 COMMANDS = (
     ("h", "Help"),
@@ -33,6 +34,7 @@ COMMANDS = (
     ("e", "Inspect events"),
     ("m", "Metrics"),
     ("r", "Recent alerts"),
+    ("s", "Security"),
     ("q", "Stop monitoring"),
 )
 SEVERITIES = list(reversed(Severity))  # CRITICAL first
@@ -57,8 +59,11 @@ def header(snap: DashboardSnapshot) -> RenderableType:
             f"   Last poll #{counters.polls}: {clock(counters.last_poll_at)}"
             f" ({counters.last_poll_seconds * 1000:.0f} ms)"
         )
+    lines: list[RenderableType] = [line, host, poll]
+    if any_enabled(snap.security):
+        lines.append(status_line(snap.security))
     return Panel(
-        Group(line, host, poll),
+        Group(*lines),
         title="LINUX RUNTIME THREAT DETECTION ENGINE (read-only)",
         border_style="bold blue",
     )
@@ -266,8 +271,9 @@ def render_dashboard(
     if height < 24 or width < 70:
         return compact(snap, height, interactive)
     layout = Layout(name="root")
-    sections: list[Layout] = [Layout(header(snap), name="header", size=5)]
-    used = 5 + 1
+    header_size = 6 if any_enabled(snap.security) else 5
+    sections: list[Layout] = [Layout(header(snap), name="header", size=header_size)]
+    used = header_size + 1
     error = error_banner(snap)
     if error is not None:
         sections.append(Layout(error, name="error", size=3))
@@ -326,6 +332,8 @@ def compact(snap: DashboardSnapshot, height: int, interactive: bool) -> Renderab
         f"alerts={snap.unique_alerts} incidents={len(snap.incidents)} dropped={c.dropped}"
     )
     parts: list[RenderableType] = [status]
+    if any_enabled(snap.security):
+        parts.append(status_line(snap.security))
     if snap.notifications:
         note = snap.notifications[0]
         alert = Text(no_wrap=True, overflow="ellipsis")

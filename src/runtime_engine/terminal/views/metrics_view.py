@@ -129,6 +129,9 @@ def render_help(telemetry: str) -> RenderableType:
         ("e", "Inspect recent events with filters (pid, name, type, severity, time, incident)"),
         ("m", "Live metrics: queue, latency, throughput, collector errors, memory"),
         ("r", "All alerts of this session (also clears pinned alert notifications)"),
+        ("l", "Live event log (scrolls; b returns)"),
+        ("t", "Process tree of this session"),
+        ("s", "Security Investigation: the six security modules, their findings and coverage"),
         ("q", "Stop monitoring gracefully and print the session report"),
         ("Ctrl+C", "Same as q. A second Ctrl+C during shutdown forces the stop."),
     ):

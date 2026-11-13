@@ -54,6 +54,37 @@ With the live terminal interface the local suite is 142 tests on Python 3.12.3 w
 The interactive dashboard was additionally exercised manually through a pseudo-terminal
 against the real `/proc` collector (key commands, pages, resize, `q` and Ctrl+C).
 
+### Security modules
+
+`tests/security/` covers each module without real malware, root or host changes: fake
+`/proc` and filesystem trees under `tmp_path`, synthetic connection and timing series,
+synthetic anomaly datasets and the ransomware simulator in a temporary lab.
+
+- Persistence: baseline/scan diffs for every watched category, SUID and capability
+  changes, unreadable paths reported as coverage gaps, allowlists, severity overrides,
+  promotion into correlation exactly once per revision, the session queue, shutdown
+  while modules run (including a scan that hangs past the grace period) and counters.
+- Network: `/proc/net` parsing (IPv4/IPv6, states), unique/ambiguous/unattributed
+  attribution, beacon coefficient-of-variation on periodic vs. jittered series,
+  exclusions and live NETWORK_CONNECTION events reaching rule RT006.
+- Anomaly: feature extraction, robust scaling, Isolation Forest and robust-z fallback
+  agreement on injected outliers, thresholds, explanations and model artifact hash checks.
+- Integrity: Merkle leaf/node encoding, odd-node promotion, empty tree, proofs, tamper
+  and baseline-replacement detection through signed anchors, symlink and permission
+  handling, `--full` bypassing the hash cache.
+- Exposure: each EX rule on fixture files, risk scoring and grades, the accepted
+  baseline and incremental scans.
+- Ransomware: entropy values, sampling bounds and rate limit, high entropy alone not
+  alerting, mass modification alone not alerting, encryption-like activity alerting,
+  window and memory bounds, polling fallback, missing directories reported as degraded,
+  simulator refusals outside its lab and cleanup removing only its own files.
+- Terminal: the `s` menu, module pages, filters, finding details from live and stored
+  data, the dashboard header line, the footer key and the session summary section.
+
+With the six modules the local suite is 231 tests on Python 3.12.3, 94% statement
+coverage, Ruff and strict mypy clean. The full-screen dashboard with all modules was
+also run through a pseudo-terminal against the real host until `--duration` stopped it.
+
 ## Reproduce a complete demo
 
 ```bash

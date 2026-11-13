@@ -198,6 +198,7 @@ class DashboardSnapshot:
     latency: LatencySummary
     peak_rss_kb: int | None
     error: str | None
+    security: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def peak_rss_kb() -> int | None:
@@ -422,8 +423,12 @@ class DashboardState:
                 Verbosity.DEBUG,
             )
 
-    def apply(self, result: ProcessResult, baseline: bool = False) -> None:
-        """Mirror one pipeline result. Called only from the pipeline thread."""
+    def apply(self, result: ProcessResult, baseline: bool = False, *, counted: bool = True) -> None:
+        """Mirror one pipeline result. Called only from the pipeline thread.
+
+        `counted=False` is for promoted security findings: they never entered the event queue
+        as accepted collector events, so they must not change the event counters.
+        """
         now = self.clock()
         with self.lock:
             event = result.event
@@ -447,8 +452,9 @@ class DashboardState:
                     event_id=event.event_id,
                 )
                 return
-            self.counters.processed += 1
-            self._observe_latency(result.latency_seconds)
+            if counted:
+                self.counters.processed += 1
+                self._observe_latency(result.latency_seconds)
             if self.latest_event_time is None or event.timestamp > self.latest_event_time:
                 self.latest_event_time = event.timestamp
             for alert in result.alerts:
@@ -664,6 +670,7 @@ class DashboardState:
     ) -> DashboardSnapshot:
         verbosity = self.info.verbosity if verbosity is None else verbosity
         now = self.clock()
+        security = self.security.overview()
         with self.lock:
             recent = [self.processes[k] for k in reversed(self.recent_processes)]
             suspicious = sorted(
@@ -691,6 +698,7 @@ class DashboardState:
                 latency=self.latency(),
                 peak_rss_kb=peak_rss_kb(),
                 error=self.error,
+                security=security,
             )
 
     def process(self, key: str) -> ProcessRecord | None:
@@ -790,6 +798,14 @@ class DashboardState:
 
     def summary(self, status: str | None = None) -> dict[str, Any]:
         """JSON-serializable record of what was measured. Unmeasured values are None."""
+        security_modules = {
+            module: entry
+            | {
+                "last_scan": entry["last_scan"].isoformat() if entry["last_scan"] else None,
+                "worst": entry["worst"].value if entry["worst"] else None,
+            }
+            for module, entry in self.security.overview().items()
+        }
         with self.lock:
             info, counters = self.info, self.counters
             end = self.stopped_at or self.clock()
@@ -850,6 +866,7 @@ class DashboardState:
                         for s in Severity
                     },
                 },
+                "security_modules": security_modules,
                 "incident_ids": sorted(self.incidents),
                 "incidents": [
                     {

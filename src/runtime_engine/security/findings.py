@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 import threading
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -226,14 +226,19 @@ class SecurityState:
 
     def overview(self) -> dict[str, dict[str, Any]]:
         with self.lock:
+            latest: dict[str, Finding] = {f.finding_id: f for f in self.findings}
             result: dict[str, dict[str, Any]] = {}
             for module in MODULES:
                 report = self.reports.get(module)
+                mine = [f for f in latest.values() if f.module == module]
                 result[module] = {
                     "enabled": self.enabled.get(module, "not configured"),
                     "status": report.status if report else None,
                     "last_scan": report.started_at if report else None,
-                    "findings": len({f.finding_id for f in self.findings if f.module == module}),
+                    "findings": len(mine),
+                    "promoted": sum(1 for f in mine if f.promoted),
+                    "by_severity": dict(Counter(f.severity.value for f in mine)),
+                    "worst": max((f.severity for f in mine), key=lambda s: s.rank, default=None),
                     "scans": self.scans.get(module, 0),
                 }
             return result
