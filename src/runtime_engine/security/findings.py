@@ -18,7 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from runtime_engine.events.schema import Severity
+from runtime_engine.events.schema import Event, Severity
 
 MODULES = ("persistence", "network", "anomaly", "integrity", "exposure", "ransomware")
 RULE_PREFIX = re.compile(r"^([A-Z]{2,3}\d{3}):")
@@ -140,6 +140,7 @@ class ScanReport:
     summary: dict[str, Any] = field(default_factory=dict)
     suppressed: int = 0
     error: str | None = None
+    events: list[Event] = field(default_factory=list)  # telemetry for the pipeline
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ScanReport":

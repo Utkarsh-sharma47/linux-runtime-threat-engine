@@ -30,6 +30,7 @@ and the session is saved; list saved sessions with the `sessions` command.
 """
 NOT_FOUND = {
     "persistence": "error: finding not found",
+    "network": "error: finding not found",
     "process": "error: no stored process with that PID",
     "session": "error: session not found",
 }
@@ -131,6 +132,19 @@ def parser() -> argparse.ArgumentParser:
     persistence.add_argument("action", choices=["baseline", "scan", "show"])
     persistence.add_argument("--id", dest="finding_id", help="Show one finding (with show)")
     persistence.add_argument("--json", action="store_true")
+    network = sub.add_parser(
+        "network",
+        help="Network connections by process, beacon analysis and findings",
+        description="connections: current sockets with process attribution; process: one "
+        "PID's sockets and stored connection events; analyze: periodicity of a JSONL "
+        "timeline (--input) or synthetic timelines (--demo); show: stored findings.",
+    )
+    network.add_argument("action", choices=["connections", "process", "analyze", "show"])
+    network.add_argument("--pid", type=int)
+    network.add_argument("--input", type=Path, help="JSONL with time, destination, process")
+    network.add_argument("--demo", action="store_true", help="Analyze synthetic timelines")
+    network.add_argument("--id", dest="finding_id", help="Show one finding (with show)")
+    network.add_argument("--json", action="store_true")
     return result
 
 
@@ -184,6 +198,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.action,
                 as_json=args.json,
                 finding_id=args.finding_id,
+            )
+        if args.command == "network":
+            return security_app.network_command(
+                database,
+                settings,
+                console,
+                args.action,
+                as_json=args.json,
+                pid=args.pid,
+                finding_id=args.finding_id,
+                input_path=args.input,
+                demo=args.demo,
             )
         if args.command == "incidents":
             print(

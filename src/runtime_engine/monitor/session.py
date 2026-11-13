@@ -70,7 +70,11 @@ class MonitorSession:
         self.security_done = threading.Event()
         self.scheduler = (
             SecurityScheduler(
-                security_modules, self.submit_finding, state.security, self.stop_requested
+                security_modules,
+                self.submit_finding,
+                state.security,
+                self.stop_requested,
+                self.submit_event,
             )
             if security_modules
             else None
@@ -140,6 +144,13 @@ class MonitorSession:
         if self.stop_requested.is_set():
             return False
         return self._put((False, finding), event=False)
+
+    def submit_event(self, event: Event) -> bool:
+        """Telemetry from a module thread (e.g. network connections): counted as observed."""
+        if self.stop_requested.is_set():
+            return False
+        self.state.record_observed()
+        return self._put((False, event))
 
     def _enqueue(self, baseline: bool, event: Event) -> bool:
         return self._put((baseline, event))

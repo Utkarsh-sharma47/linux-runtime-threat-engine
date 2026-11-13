@@ -2,6 +2,7 @@
 
 from runtime_engine.config.settings import ModuleSettings, Settings
 from runtime_engine.security.findings import SeverityPolicy
+from runtime_engine.security.network import NetworkMonitor
 from runtime_engine.security.persistence import PersistenceMonitor, entries_from_body
 from runtime_engine.security.scheduler import SecurityModule
 from runtime_engine.storage.database import Database
@@ -36,4 +37,9 @@ def build_modules(
         modules.append(persistence_monitor(settings, database))
     else:
         off["persistence"] = "disabled in configuration"
+    network = settings.security.network
+    if network.enabled:
+        modules.append(NetworkMonitor(network, policy(settings, network)))
+    else:
+        off["network"] = "disabled in configuration"
     return modules, off
