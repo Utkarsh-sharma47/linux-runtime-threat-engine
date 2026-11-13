@@ -35,6 +35,12 @@ class Verbosity(IntEnum):
     def parse(cls, name: str) -> "Verbosity":
         return cls[name.upper()]
 
+class ProcessLifecycle(StrEnum):
+    RUNNING = "running"
+    EXITED = "exited"
+    GONE = "gone"
+    NEVER_OBSERVED = "never_observed"
+
 
 class EntryKind(StrEnum):
     OBSERVED = "OBSERVED"  # raw, normalized telemetry; not a finding
@@ -100,6 +106,8 @@ class ProcessRecord:
     alert_ids: list[str] = field(default_factory=list)
     incident_ids: list[str] = field(default_factory=list)
     event_ids: list[str] = field(default_factory=list)
+    exit_status: str | None = None
+    exit_observed_at: datetime | None = None
     matches: int = 0
     severity: Severity | None = None
 
@@ -109,6 +117,8 @@ class ProcessRecord:
             alert_ids=list(self.alert_ids),
             incident_ids=list(self.incident_ids),
             event_ids=list(self.event_ids),
+            exit_status=self.exit_status,
+            exit_observed_at=self.exit_observed_at,
         )
 
 
@@ -703,6 +713,51 @@ class DashboardState:
                     reverse=True,
                 )
             ]
+
+    def build_process_tree(self, include_baseline: bool = False) -> dict[str, Any]:
+        """Build a process tree dictionary from observed records.
+        
+        Returns a dict structure:
+            {
+                process_key: {
+                    "event": Event,
+                    "lifecycle": ProcessLifecycle,
+                    "children": [child_keys],
+                    "parent": parent_key or None,
+                    "lifetime_info": dict
+                }
+            }
+        """
+        with self.lock:
+            tree = {}
+            for key, record in self.processes.items():
+                # Skip baseline processes unless requested
+                if not include_baseline and record.baseline:
+                    continue
+                
+                # Determine lifecycle status
+                now = self.clock()
+                lifecycle = ProcessLifecycle.RUNNING
+                if record.exit_status is not None:
+                    if record.exit_observed_at is not None:
+                        lifecycle = ProcessLifecycle.EXITED
+                    else:
+                        lifecycle = ProcessLifecycle.GONE
+                
+                tree[key] = {
+                    "event": record.event,
+                    "lifecycle": lifecycle,
+                    "children": self.children.get(key, []),
+                    "parent": record.parent,
+                    "lifetime_info": {
+                        "first_observed": record.first_observed,
+                        "last_observed": now,
+                        "exit_status": record.exit_status,
+                        "exit_observed_at": record.exit_observed_at,
+                        "baseline": record.baseline,
+                    }
+                }
+            return tree
 
     def incident_list(self) -> list[Incident]:
         with self.lock:

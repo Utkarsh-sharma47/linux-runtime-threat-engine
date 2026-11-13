@@ -50,11 +50,12 @@ DASHBOARD_COMMANDS = (
     ("l", "Live logs"),
     ("r", "Alerts"),
     ("m", "Metrics"),
+    ("t", "Process tree"),
     ("q", "Stop monitoring"),
 )
 
 # Set of page keys that open inspection pages (used for dashboard loop)
-PAGES = {"p", "i", "e", "m", "r", "l"}
+PAGES = {"p", "i", "e", "m", "r", "l", "t"}
 
 INSPECTION_COMMANDS = (
     ("b", "Back"),
@@ -401,6 +402,38 @@ class Inspector:
             return self.state.event_records()
         return records_from_database(self.database, self.database.recent_events(500))
 
+    # ----- process tree -----
+
+    def process_tree_page(self) -> None:
+        """Open the process tree view."""
+        from runtime_engine.terminal.dashboard import render_process_tree
+        
+        tree = self.state.build_process_tree() if self.state else {}
+        selected_key = None
+        
+        # Find a suspicious process to highlight
+        if self.state:
+            for key, data in tree.items():
+                if data["event"].severity and data["event"].severity.rank < 3:
+                    selected_key = key
+                    break
+        
+        if selected_key is None:
+            selected_key = next(iter(tree)) if tree else None
+        
+        # Render the tree
+        try:
+            tree_render = render_process_tree(
+                self.state, self.console.width, self.console.height,
+                process_tree=tree, selected_key=selected_key
+            )
+            self.console.print(tree_render)
+        except Exception as e:
+            self.say(f"Error rendering process tree: {e}")
+        
+        # Ask to go back
+        self.ask("Press Enter to return to the dashboard ")
+
     def event_page(self) -> None:
         self.console.print(Text(event_view.FILTER_HELP, style="dim"))
         while True:
@@ -524,7 +557,7 @@ class InteractiveMonitor:
                 key = key.lower()
                 if key == "q":
                     return "user_quit"
-                if key in ("p", "i", "e", "m", "r", "l", "h"):
+                if key in ("p", "i", "e", "m", "r", "l", "t", "h"):
                     return key
 
     def run(self) -> str:

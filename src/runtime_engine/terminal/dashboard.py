@@ -1,5 +1,7 @@
 """Dashboard layout: a pure function of one state snapshot and the terminal size."""
 
+from typing import Any
+
 from rich.console import Group, RenderableType
 from rich.layout import Layout
 from rich.panel import Panel
@@ -7,7 +9,12 @@ from rich.table import Table
 from rich.text import Text
 
 from runtime_engine.events.schema import Severity
-from runtime_engine.monitor.state import DashboardSnapshot, Verbosity
+from runtime_engine.monitor.state import (
+    DashboardSnapshot,
+    DashboardState,
+    ProcessLifecycle,
+    Verbosity,
+)
 from runtime_engine.terminal.formatting import (
     STATUS_STYLES,
     clean,
@@ -329,3 +336,142 @@ def compact(snap: DashboardSnapshot, height: int, interactive: bool) -> Renderab
     parts.extend(entry_text(e) for e in (snap.logs[-room:] if room else []))
     parts.append(footer(snap, interactive))
     return Group(*parts)
+
+
+def render_process_tree(state: DashboardState | None, width: int, height: int, *,
+    process_tree: dict[str, Any] | None = None,
+    selected_key: str | None = None,
+    show_suspicious_only: bool = False) -> RenderableType:
+    """Render a process ancestry tree using Rich Tree.
+
+    Shows observed parent-child relationships from the monitoring session.
+    Handles PID reuse, missing parents, and historical processes.
+    Uses Rich Tree for clear hierarchical visualization.
+
+    Args:
+        state: The DashboardState containing process records.
+        width: Terminal width in characters.
+        height: Terminal height in characters.
+        process_tree: Pre-built process tree dict. If None, builds from state.
+        selected_key: Key of the process to root the tree at.
+        show_suspicious_only: If True, only show processes with severity matches.
+
+    Returns:
+        A Rich Renderable representing the process tree.
+    """
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.tree import Tree
+
+    if state is None:
+        return Panel(
+            Text("No processes observed yet.", style="dim"),
+            title="PROCESS TREE",
+            title_align="left",
+        )
+    if process_tree is None:
+        process_tree = state.build_process_tree()
+
+    # Select root if specified
+    if selected_key is None:
+        # Show tree rooted at first suspicious process
+        suspicious_keys = [k for k, v in process_tree.items()
+                          if v["lifecycle"] == ProcessLifecycle.EXITED
+                          or (getattr(v["event"], "severity", None) 
+                              and v["event"].severity.rank < 3)]
+        if suspicious_keys:
+            selected_key = suspicious_keys[0]
+        else:
+            # Show all processes
+            selected_key = next(iter(process_tree)) if process_tree else None
+
+    if selected_key is None or selected_key not in process_tree:
+        return Panel(
+            Text("No processes observed yet.", style="dim"),
+            title="PROCESS TREE",
+            title_align="left",
+        )
+
+    # Build the tree recursively
+    def add_node(parent_tree: Tree, key: str, depth: int = 0) -> None:
+        if key not in process_tree:
+            return
+
+        node_data = process_tree[key]
+        event = node_data["event"]
+        lifecycle = node_data["lifecycle"]
+
+        # Create node label
+        pid = event.pid if event.pid else "?"
+        pname = (event.process_name or "unknown")[:20]
+        suffix = ""
+        if lifecycle == ProcessLifecycle.EXITED:
+            suffix = " [EXITED]"
+        elif lifecycle == ProcessLifecycle.GONE:
+            suffix = " [GONE]"
+        elif lifecycle == ProcessLifecycle.RUNNING:
+            suffix = " [RUNNING]"
+
+        if show_suspicious_only and not (
+    getattr(event, "severity", None)
+    and getattr(event.severity, "rank", -1) < 3
+):
+            return  # Skip non-suspicious processes
+
+        # Create rich label
+        label_text = f"PID {pid} {pname}{suffix}"
+        if getattr(event, "severity", None):
+            label_text += f" {severity_text(event.severity)}"
+
+        node = Tree(label_text, guide_style="dim")
+
+        # Add children
+        for child_key in node_data["children"]:
+            add_node(node, child_key, depth + 1)
+
+        # Add parent info if available
+        if node_data["parent"]:
+            parent_record = state.processes.get(node_data["parent"])
+            if parent_record is not None and parent_record.event is not None:
+                node.add(f"  (parent PID {parent_record.event.pid})")
+
+        parent_tree.add(node)
+
+    # Create the tree
+    root_key = selected_key
+    root_data = process_tree.get(root_key, {})
+    root_event = root_data.get("event")
+
+    if root_event is None:
+        return Panel(
+            Text("No process data available.", style="dim"),
+            title="PROCESS TREE",
+            title_align="left",
+        )
+
+    # Create root label
+    pid = root_event.pid if root_event.pid else "?"
+    pname = (root_event.process_name or "unknown")[:25]
+    suffix = ""
+    root_lifecycle = root_data.get("lifecycle", ProcessLifecycle.RUNNING)
+    if root_lifecycle == ProcessLifecycle.EXITED:
+        suffix = " [EXITED]"
+    elif root_lifecycle == ProcessLifecycle.GONE:
+        suffix = " [GONE]"
+
+    root_label = f"PID {pid} {pname}{suffix}"
+    if getattr(root_event, "severity", None):
+        root_label += f" {severity_text(root_event.severity)}"
+
+    root_tree = Tree(root_label, guide_style="bold")
+
+    # Add children recursively
+    for child_key in root_data.get("children", []):
+        add_node(root_tree, child_key)
+
+    return Panel(
+        root_tree,
+        title=f"PROCESS TREE {'- SUSPICIOUS ONLY' if show_suspicious_only else ''}",
+        title_align="left",
+        border_style="green",
+    )
