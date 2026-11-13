@@ -17,7 +17,7 @@ from runtime_engine.incidents.generator import generate
 from runtime_engine.incidents.reporter import export_json, terminal
 from runtime_engine.monitor.state import Verbosity
 from runtime_engine.storage.database import Database
-from runtime_engine.terminal import app, security_app
+from runtime_engine.terminal import app, atomic_app, security_app
 
 MONITOR_EPILOG = """\
 interactive commands (dashboard mode):
@@ -36,6 +36,7 @@ NOT_FOUND = {
     "exposure": "error: finding not found",
     "process": "error: no stored process with that PID",
     "session": "error: session not found",
+    "atomic": "error: Atomic run not found (see: atomic runs)",
 }
 
 
@@ -234,6 +235,7 @@ def parser() -> argparse.ArgumentParser:
     ransomware.add_argument("--duration", type=positive, default=30)
     ransomware.add_argument("--keep", action="store_true", help="Keep the demo lab files")
     ransomware.add_argument("--json", action="store_true")
+    atomic_app.add_parser(sub)
     return result
 
 
@@ -251,6 +253,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "rules":
             print(json.dumps([r.model_dump(mode="json") for r in rules if r.enabled], indent=2))
             return 0
+        if args.command == "atomic":
+            atomic_app.validate(args)
+            return atomic_app.command(args, settings, rules, console)
         if args.command == "monitor":
             if not sys.platform.startswith("linux"):
                 raise ValueError("monitor requires Linux /proc")
