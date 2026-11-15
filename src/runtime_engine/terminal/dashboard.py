@@ -27,15 +27,26 @@ from runtime_engine.terminal.formatting import (
 from runtime_engine.terminal.live_logs import entry_text, log_panel
 
 COMMANDS = (
+    ("1", "Live Monitoring"),
+    ("2", "Process Explorer"),
+    ("3", "Process Ancestry"),
+    ("4", "Incident Investigation"),
+    ("5", "Security Modules"),
+    ("6", "Atomic Red Team"),
+    ("7", "Offline Evaluation"),
+    ("8", "System Health"),
+    ("9", "Historical Sessions"),
     ("h", "Help"),
-    ("p", "Inspect process"),
-    ("i", "Inspect incident"),
-    ("e", "Inspect events"),
-    ("m", "Metrics"),
-    ("r", "Recent alerts"),
     ("q", "Stop monitoring"),
 )
 SEVERITIES = list(reversed(Severity))  # CRITICAL first
+SEVERITY_COLORS = {
+    "CRITICAL": "red",
+    "HIGH": "orange",
+    "MEDIUM": "yellow",
+    "LOW": "blue",
+    "INFO": "neutral",
+}
 
 
 def header(snap: DashboardSnapshot) -> RenderableType:
