@@ -221,6 +221,11 @@ ancestry, so the engine reports one incident rather than two:
 [h] Help  [p] Inspect process  [i] Inspect incident  [e] Inspect events  [m] Metrics  [r] Recent alerts  [q] Stop monitoring  Ctrl+C: graceful stop
 ```
 
+The footer in that capture is from an earlier session. The live footer adds
+`[s] Security`, `[n] Network` and `[a] Atomic`. `[l]` (live log) and `[t]` (process
+tree) are in the help page (`h`) so the one-line footer still fits a 140-column
+terminal.
+
 "Suspicious Detections" counts every rule match; "Unique Alerts" counts them after
 deduplication; "Active" incidents are those whose correlation window is still open, so
 related evidence can still join. "Telemetry Gaps/Poll" counts optional fields (usually
@@ -243,6 +248,8 @@ only rendering pauses.
 | `l` | Live event log (single keys; `b` returns) |
 | `t` | Process tree of the session |
 | `s` | Security Investigation: the six security modules, their findings and coverage |
+| `n` | Network investigation: connections, attribution, detections and Atomic sessions |
+| `a` | Atomic execution sessions registered with this live monitor |
 | `q` | Stop gracefully and print the session report |
 | Ctrl+C | Same as `q` (also SIGTERM/SIGHUP). A second Ctrl+C while stopping forces the stop |
 
@@ -424,6 +431,22 @@ python -m runtime_engine.main integrity demo                  # Merkle proofs an
 python -m runtime_engine.main --db demo.db ransomware demo    # simulator in a temp lab, then cleanup
 python -m runtime_engine.main --db demo.db exposure scan      # read-only posture of this host
 ```
+
+## Atomic evaluation
+
+Offline grading and the live synthetic acceptance path use the same event schema,
+normalization, detection rules and security modules. `atomic run` executes a reviewed
+Atomic test only after the approval token from `atomic inspect`, and it is not part of
+the test suite. This command never executes an Atomic test; every event is labeled
+synthetic:
+
+```bash
+python -m runtime_engine.main atomic live-accept --engine-db /tmp/rte-accept.db --json
+```
+
+The JSON report's `evidence_label` is `SYNTHETIC`. See the
+[Atomic lab](testing/atomic-red-team/README.md) and the
+[live integration report](docs/ATOMIC_LIVE_INTEGRATION_REPORT.md).
 
 Measured on the development host (Ubuntu, Python 3.12, non-root): one scan costs about
 70-110 ms for persistence, network and anomaly, 440 ms for a full exposure scan (140 ms

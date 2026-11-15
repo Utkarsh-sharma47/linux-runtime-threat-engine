@@ -380,8 +380,7 @@ class Database:
     def atomic_sessions(self, *, limit: int = 100) -> list[dict[str, Any]]:
         with self.lock:
             rows = self.connection.execute(
-                "SELECT body, evaluation FROM atomic_sessions "
-                "ORDER BY started_at DESC LIMIT ?",
+                "SELECT body, evaluation FROM atomic_sessions ORDER BY started_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         result: list[dict[str, Any]] = []

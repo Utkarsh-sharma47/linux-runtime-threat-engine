@@ -79,9 +79,8 @@ def build_rows(
                 "local": local,
                 "remote": remote,
                 "state": meta.get("state") or "-",
-                "attribution": meta.get("attribution") or (
-                    "unique" if event.pid else "unattributed"
-                ),
+                "attribution": meta.get("attribution")
+                or ("unique" if event.pid else "unattributed"),
                 "first_seen": event.timestamp,
                 "last_seen": event.timestamp,
                 "synthetic": bool(meta.get("synthetic")),
@@ -129,9 +128,7 @@ def build_rows(
             }
         )
 
-    finding_rows = [
-        f.model_dump(mode="json") if isinstance(f, Finding) else f for f in findings
-    ]
+    finding_rows = [f.model_dump(mode="json") if isinstance(f, Finding) else f for f in findings]
     for row in rows:
         process_key = row.get("process_key")
         related_alerts = [
@@ -154,9 +151,10 @@ def build_rows(
         ]
         atomic = session_for_process_key(atomic_sessions, process_key)
         row["confidence"] = _confidence(str(row.get("attribution") or ""))
-        row["detections"] = sorted({a.rule_id for a in related_alerts} | {
-            f.get("rule_id") for f in related_findings if f.get("rule_id")
-        })
+        row["detections"] = sorted(
+            {a.rule_id for a in related_alerts}
+            | {f.get("rule_id") for f in related_findings if f.get("rule_id")}
+        )
         row["incidents"] = sorted({i.incident_id for i in related_incidents})
         row["atomic_run_id"] = atomic["run_id"] if atomic else None
         row["atomic_synthetic"] = bool(atomic and atomic.get("synthetic"))
@@ -196,9 +194,7 @@ def render_network_investigation(
     active = [r for r in atomic_sessions or [] if r.get("status") not in ("COMPLETED",)]
     header.add_row(
         "ATOMIC SESSIONS",
-        ", ".join(
-            f"{s['run_id']}{' [SYNTHETIC]' if s.get('synthetic') else ''}" for s in active
-        )
+        ", ".join(f"{s['run_id']}{' [SYNTHETIC]' if s.get('synthetic') else ''}" for s in active)
         or "none active",
     )
 

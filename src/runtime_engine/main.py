@@ -22,7 +22,9 @@ from runtime_engine.terminal import app, atomic_app, security_app
 MONITOR_EPILOG = """\
 interactive commands (dashboard mode):
   h help   p inspect process   i inspect incident   e inspect events
-  m metrics   r recent alerts   q stop   Ctrl+C graceful stop (twice forces)
+  m metrics   r recent alerts   l live log   t process tree
+  s security modules   n network investigation   a Atomic sessions
+  q stop   Ctrl+C graceful stop (twice forces)
 
 The dashboard needs an interactive terminal on stdin and stdout. Otherwise, or with
 --no-dashboard, events are printed as log lines. A session report is printed on stop

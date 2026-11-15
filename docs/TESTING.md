@@ -84,6 +84,30 @@ synthetic anomaly datasets and the ransomware simulator in a temporary lab.
 With the six modules the local suite is 231 tests on Python 3.12.3, 94% statement
 coverage, Ruff and strict mypy clean. The full-screen dashboard with all modules was
 also run through a pseudo-terminal against the real host until `--duration` stopped it.
+Counts above are earlier milestones. The current suite is the release measurement below.
+
+## Release integration (2026-11-15)
+
+Measured on Python 3.11.15 with `pip install -e '.[dev]'` and no `ml` extra, which is
+what GitHub Actions installs:
+
+- `ruff check .` and `ruff format --check .` passed.
+- `mypy src` passed under the strict configuration.
+- `pytest -q --cov=runtime_engine --cov-report=term-missing --cov-fail-under=90`:
+  288 passed, 2 skipped, 90.61% statement coverage. The skips are the Isolation Forest
+  cases. With `pip install -e '.[dev,ml]'` those anomaly tests passed (10 passed in
+  `tests/security/test_anomaly.py`).
+- `python -m build` produced the sdist and wheel. Installed outside the source tree,
+  the wheel imported as version 0.1.0 and `runtime-engine rules` printed the six
+  bundled rules.
+- `atomic live-accept` submitted two synthetic events through `MonitorSession` and the
+  shared pipeline. The report grade was DETECTED for RT002, RT005 and RT006, one
+  incident was correlated, and `evidence_label` was SYNTHETIC. No Atomic test was
+  executed. The harness does not start the six module schedulers; their component
+  grades were NOT APPLICABLE and the report says their telemetry was unavailable.
+- Dashboard, security menu, network investigation and Atomic run list were rendered at
+  150×50, 100×35, 80×24 and 60×15. The three full layouts fill the screen; 60×15 uses
+  the compact view and does not exceed the height.
 
 ## Reproduce a complete demo
 
