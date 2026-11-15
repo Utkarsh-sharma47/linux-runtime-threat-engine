@@ -131,7 +131,8 @@ def test_empty_incident_list_message():
 
 
 @pytest.mark.parametrize(
-    "width,height", [(20, 6), (40, 10), (60, 15), (80, 24), (90, 30), (150, 50), (300, 100)]
+    "width,height",
+    [(20, 6), (40, 10), (60, 15), (80, 24), (90, 30), (100, 35), (150, 50), (300, 100)],
 )
 def test_terminal_resize_never_crashes(chain, width, height):
     state, _ = chain
@@ -145,6 +146,31 @@ def test_terminal_resize_never_crashes(chain, width, height):
     console = make_console(150, 50)
     console.print(render_dashboard(state.snapshot(), 150, 50))
     assert len(text_of(console).splitlines()) == 50
+
+
+@pytest.mark.parametrize(
+    "width,height,fills",
+    [(150, 50, True), (100, 35, True), (80, 24, True), (60, 15, False)],
+)
+def test_required_terminal_sizes_stay_within_the_screen(chain, width, height, fills):
+    """Release layouts: full screens fill exactly; the 60x15 compact view must not scroll."""
+    from runtime_engine.terminal.views.atomic_view import render_runs
+    from runtime_engine.terminal.views.network_investigation import render_network_investigation
+    from runtime_engine.terminal.views.security_view import render_security_menu
+
+    state, _ = chain
+    state.notifications.items.clear()
+    console = make_console(width, height)
+    console.print(render_dashboard(state.snapshot(), width, height))
+    lines = text_of(console).splitlines()
+    assert lines
+    assert len(lines) == height if fills else len(lines) <= height
+    for view in (
+        render_security_menu({}),
+        render_network_investigation(None, []),
+        render_runs([]),
+    ):
+        render(view, width, height)
 
 
 def test_debug_verbosity_shows_separate_diagnostics_panel(database):

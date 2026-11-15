@@ -110,9 +110,7 @@ class LiveAtomicBridge:
         overview = self.state.security.overview()
         for module, entry in overview.items():
             enabled = entry.get("enabled", "not configured")
-            status[f"module:{module}"] = (
-                "enabled" if enabled == "enabled" else f"off ({enabled})"
-            )
+            status[f"module:{module}"] = "enabled" if enabled == "enabled" else f"off ({enabled})"
         return status
 
     def register(
@@ -292,12 +290,8 @@ class LiveAtomicBridge:
         """Grade using the same component grades as offline analysis, from live correlations."""
         record = self._require(run_id)
         correlated = self.correlate(run_id)
-        observed_rules = {
-            a["rule_id"] for a in correlated["alerts"] if a.get("rule_id")
-        }
-        observed_findings = {
-            f["rule_id"] for f in correlated["findings"] if f.get("rule_id")
-        }
+        observed_rules = {a["rule_id"] for a in correlated["alerts"] if a.get("rule_id")}
+        observed_findings = {f["rule_id"] for f in correlated["findings"] if f.get("rule_id")}
         event_types = {
             e.event.event_type.value
             for e in self.state.events
@@ -314,8 +308,16 @@ class LiveAtomicBridge:
                     expectation = ModuleExpectation(rules=list(expected_set))
                 observed = observed_rules
                 telemetry = bool(event_types)
-                behaviour = bool(event_types & {"PROCESS_START", "PROCESS_EXIT", "FILE_ACCESS",
-                                                "NETWORK_CONNECTION", "PRIVILEGE_CHANGE"})
+                behaviour = bool(
+                    event_types
+                    & {
+                        "PROCESS_START",
+                        "PROCESS_EXIT",
+                        "FILE_ACCESS",
+                        "NETWORK_CONNECTION",
+                        "PRIVILEGE_CHANGE",
+                    }
+                )
                 gaps = [] if telemetry else ["no events attributed to this Atomic session"]
             else:
                 observed = {r for r in observed_findings if r.startswith(_PREFIX.get(name, ""))}
@@ -360,9 +362,10 @@ class LiveAtomicBridge:
         else:
             execution = execution_status
         if execution_status in ("FAILED", "TIMEOUT", "EXECUTION FAILED"):
-            summary_grade, summary_reasons = EXECUTION_FAILED, [
-                f"execution status was {execution_status}"
-            ]
+            summary_grade, summary_reasons = (
+                EXECUTION_FAILED,
+                [f"execution status was {execution_status}"],
+            )
         else:
             summary_grade, summary_reasons = overall(components, execution, profile)
         evaluation = {

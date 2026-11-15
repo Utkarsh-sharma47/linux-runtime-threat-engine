@@ -2,7 +2,7 @@
 
 **Date:** 2026-11-15  
 **Status:** Pre-implementation audit (no code changes yet at report time)  
-**Working tree used for inspection:** `/home/utkarsh/Documents/Class/xISSC-Project/rte-security`
+**Working tree used for inspection:** a dedicated git worktree for the live Atomic branch (local path omitted)
 
 ---
 

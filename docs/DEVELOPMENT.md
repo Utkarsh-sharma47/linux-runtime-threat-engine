@@ -35,7 +35,8 @@ rendering assertions; run the tests with it unset.
 | `pipeline.py` | ancestry, rules, correlation, storage; `process_finding` for security findings |
 | `monitor/` | session threads and queue, dashboard state, investigation queries |
 | `security/` | the six modules, `findings.py` (Finding, policy, coverage, state), `scheduler.py`, `fsutil.py` (safe walking and hashing), `modules.py` (construction from settings) |
-| `terminal/` | Rich dashboard, inspection pages (`interactions.py`), standalone security commands (`security_app.py`), views |
+| `atomic/` | Atomic catalog, offline evidence and grading, strace collector, `LiveAtomicBridge` |
+| `terminal/` | Rich dashboard, inspection pages (`interactions.py`), standalone security commands (`security_app.py`), Atomic pages (`atomic_app.py`), views |
 | `config/settings.py` | validated settings, including `security:` per module |
 | `storage/database.py` | SQLite schema, including `security_findings` and `security_baselines` |
 
