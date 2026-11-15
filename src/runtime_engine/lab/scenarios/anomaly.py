@@ -37,8 +37,9 @@ def run(session: Path, status: LabStatus, dry_run: bool) -> ScenarioResult:
         return result
 
     model_files = list(model_dir.glob("*")) if model_dir.is_dir() else []
-    trained = any(p.suffix in {".joblib", ".pkl", ".json"} or p.name == "model.joblib"
-                  for p in model_files)
+    trained = any(
+        p.suffix in {".joblib", ".pkl", ".json"} or p.name == "model.joblib" for p in model_files
+    )
     note = {
         "state": "TRAINED" if trained else "UNTRAINED",
         "files": [p.name for p in model_files],

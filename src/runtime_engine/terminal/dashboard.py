@@ -86,9 +86,7 @@ def header(snap: DashboardSnapshot) -> RenderableType:
     )
 
 
-def lab_status_line(
-    lab: dict[str, object], counters: object, incidents: int
-) -> Text:
+def lab_status_line(lab: dict[str, object], counters: object, incidents: int) -> Text:
     """Compact security-lab demonstration panel (provenance-aware)."""
     line = Text(no_wrap=True, overflow="ellipsis")
     line.append("SECURITY LAB: ", style="bold magenta")

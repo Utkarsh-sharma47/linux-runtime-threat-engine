@@ -583,9 +583,7 @@ class Inspector:
             findings=self._security_findings("network"),
             atomic_sessions=self.state.atomic_session_list(),
         )
-        self.console.print(
-            interfaces_view.render_interfaces(report.summary if report else None)
-        )
+        self.console.print(interfaces_view.render_interfaces(report.summary if report else None))
         self.console.print(
             network_investigation.render_network_investigation(
                 report, rows, atomic_sessions=self.state.atomic_session_list()

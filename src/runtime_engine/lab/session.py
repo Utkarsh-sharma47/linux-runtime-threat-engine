@@ -37,9 +37,7 @@ def prepare_session(
     create_session_tree(session)
     ransom = ransomware_lab_path(sid)
     ransomware_sim.create_lab(str(ransom))
-    config = write_monitor_config(
-        session, session / "monitor.yaml", ransomware_dir=ransom
-    )
+    config = write_monitor_config(session, session / "monitor.yaml", ransomware_dir=ransom)
     set_active_session(session)
     status = LabStatus(
         session_id=sid,
