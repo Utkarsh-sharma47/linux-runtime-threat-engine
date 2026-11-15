@@ -46,8 +46,8 @@ def test_dashboard_initialization_shows_empty_states():
     assert "SESSION: SES-TEST" in text and "ENGINE PID: 4242" in text
     assert "No incidents correlated in this session." in text
     assert "No processes observed yet." in text
-    assert "No events to display yet" in text
-    assert "[q] Stop monitoring" in text
+    assert "No new events yet. Monitoring continues." in text
+    assert "[q] Quit" in text and "[n] Network" in text and "[a] Atomic" in text
 
 
 def test_dashboard_refresh_reflects_new_pipeline_results(database):
@@ -119,7 +119,7 @@ def test_control_characters_are_escaped():
 
 def test_empty_event_stream_panel():
     text = render(log_panel([], 10, Verbosity.NORMAL))
-    assert "No events to display yet" in text
+    assert "No new events yet. Monitoring continues." in text
 
 
 def test_empty_incident_list_message():

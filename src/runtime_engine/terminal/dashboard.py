@@ -25,15 +25,19 @@ from runtime_engine.terminal.formatting import (
     severity_text,
 )
 from runtime_engine.terminal.live_logs import entry_text, log_panel
+from runtime_engine.terminal.views.security_view import any_enabled, status_line
 
 COMMANDS = (
     ("h", "Help"),
-    ("p", "Inspect process"),
-    ("i", "Inspect incident"),
-    ("e", "Inspect events"),
+    ("p", "Process"),
+    ("i", "Incident"),
+    ("e", "Events"),
     ("m", "Metrics"),
-    ("r", "Recent alerts"),
-    ("q", "Stop monitoring"),
+    ("r", "Alerts"),
+    ("s", "Security"),
+    ("n", "Network"),
+    ("a", "Atomic"),
+    ("q", "Quit"),
 )
 SEVERITIES = list(reversed(Severity))  # CRITICAL first
 
@@ -57,8 +61,24 @@ def header(snap: DashboardSnapshot) -> RenderableType:
             f"   Last poll #{counters.polls}: {clock(counters.last_poll_at)}"
             f" ({counters.last_poll_seconds * 1000:.0f} ms)"
         )
+    lines: list[RenderableType] = [line, host, poll]
+    if any_enabled(snap.security):
+        lines.append(status_line(snap.security))
+    if snap.atomic_sessions:
+        atomic = Text(no_wrap=True, overflow="ellipsis")
+        atomic.append("ATOMIC SESSIONS [a]: ", style="bold")
+        parts = []
+        for item in snap.atomic_sessions[:3]:
+            label = item.get("run_id") or "?"
+            if item.get("synthetic"):
+                label += " [SYNTHETIC]"
+            parts.append(f"{label} ({item.get('status')})")
+        atomic.append(", ".join(parts), style="cyan")
+        if len(snap.atomic_sessions) > 3:
+            atomic.append(f" +{len(snap.atomic_sessions) - 3} more", style="dim")
+        lines.append(atomic)
     return Panel(
-        Group(line, host, poll),
+        Group(*lines),
         title="LINUX RUNTIME THREAT DETECTION ENGINE (read-only)",
         border_style="bold blue",
     )
@@ -266,8 +286,13 @@ def render_dashboard(
     if height < 24 or width < 70:
         return compact(snap, height, interactive)
     layout = Layout(name="root")
-    sections: list[Layout] = [Layout(header(snap), name="header", size=5)]
-    used = 5 + 1
+    header_size = 5
+    if any_enabled(snap.security):
+        header_size += 1
+    if snap.atomic_sessions:
+        header_size += 1
+    sections: list[Layout] = [Layout(header(snap), name="header", size=header_size)]
+    used = header_size + 1
     error = error_banner(snap)
     if error is not None:
         sections.append(Layout(error, name="error", size=3))
@@ -326,6 +351,8 @@ def compact(snap: DashboardSnapshot, height: int, interactive: bool) -> Renderab
         f"alerts={snap.unique_alerts} incidents={len(snap.incidents)} dropped={c.dropped}"
     )
     parts: list[RenderableType] = [status]
+    if any_enabled(snap.security):
+        parts.append(status_line(snap.security))
     if snap.notifications:
         note = snap.notifications[0]
         alert = Text(no_wrap=True, overflow="ellipsis")
@@ -338,10 +365,15 @@ def compact(snap: DashboardSnapshot, height: int, interactive: bool) -> Renderab
     return Group(*parts)
 
 
-def render_process_tree(state: DashboardState | None, width: int, height: int, *,
+def render_process_tree(
+    state: DashboardState | None,
+    width: int,
+    height: int,
+    *,
     process_tree: dict[str, Any] | None = None,
     selected_key: str | None = None,
-    show_suspicious_only: bool = False) -> RenderableType:
+    show_suspicious_only: bool = False,
+) -> RenderableType:
     """Render a process ancestry tree using Rich Tree.
 
     Shows observed parent-child relationships from the monitoring session.
@@ -372,13 +404,15 @@ def render_process_tree(state: DashboardState | None, width: int, height: int, *
     if process_tree is None:
         process_tree = state.build_process_tree()
 
+    def severity_of(key: str) -> Severity | None:
+        # Rule-match severity lives on the state's process record, not on the event.
+        record = state.processes.get(key)
+        return record.severity if record is not None else None
+
     # Select root if specified
     if selected_key is None:
         # Show tree rooted at first suspicious process
-        suspicious_keys = [k for k, v in process_tree.items()
-                          if v["lifecycle"] == ProcessLifecycle.EXITED
-                          or (getattr(v["event"], "severity", None) 
-                              and v["event"].severity.rank < 3)]
+        suspicious_keys = [k for k in process_tree if severity_of(k) is not None]
         if suspicious_keys:
             selected_key = suspicious_keys[0]
         else:
@@ -409,19 +443,15 @@ def render_process_tree(state: DashboardState | None, width: int, height: int, *
             suffix = " [EXITED]"
         elif lifecycle == ProcessLifecycle.GONE:
             suffix = " [GONE]"
-        elif lifecycle == ProcessLifecycle.RUNNING:
-            suffix = " [RUNNING]"
 
-        if show_suspicious_only and not (
-    getattr(event, "severity", None)
-    and getattr(event.severity, "rank", -1) < 3
-):
-            return  # Skip non-suspicious processes
+        severity = severity_of(key)
+        if show_suspicious_only and severity is None:
+            return  # Skip processes without a rule match
 
         # Create rich label
         label_text = f"PID {pid} {pname}{suffix}"
-        if getattr(event, "severity", None):
-            label_text += f" {severity_text(event.severity)}"
+        if severity is not None:
+            label_text += f" {severity.value}"
 
         node = Tree(label_text, guide_style="dim")
 
@@ -460,8 +490,9 @@ def render_process_tree(state: DashboardState | None, width: int, height: int, *
         suffix = " [GONE]"
 
     root_label = f"PID {pid} {pname}{suffix}"
-    if getattr(root_event, "severity", None):
-        root_label += f" {severity_text(root_event.severity)}"
+    root_severity = severity_of(root_key)
+    if root_severity is not None:
+        root_label += f" {root_severity.value}"
 
     root_tree = Tree(root_label, guide_style="bold")
 

@@ -12,8 +12,10 @@
 - Stat rechecking and start-time-qualified identities reduce PID reuse mistakes but do
   not give atomic kernel snapshots. Very rare same-PID/same-start-tick reuse remains
   ambiguous. Parent metadata can race with reparenting; no absolute guarantee is made.
-- There is no live file, network, privilege-change, audit or eBPF collector. The related
-  rules use replay telemetry. Disappearance during polling never becomes a fake exit.
+- There is no live file, privilege-change, audit or eBPF collector; the related rules
+  use replay telemetry. Network connections are only socket snapshots from `/proc/net`
+  taken by the network module, so short-lived connections are missed. Disappearance
+  during polling never becomes a fake exit.
 - Default rules are small indicators, not a detection-accuracy study. Legitimate
   automation, maintenance and sudo can match. Tune them to authorized workloads.
 - Names and replay fields can be forged. A same-host compromised observer can evade
@@ -58,6 +60,30 @@
 - A storage error aborts the run. Do not catch it and continue using the same Pipeline;
   in-memory state may be ahead of its rolled-back database transaction.
 
+## Security modules
+
+Each module documents its own limits in `docs/security/`. Common to all of them:
+
+- They are periodic, user-space scans (`/proc`, file metadata, inotify), not kernel
+  instrumentation. Activity between two scans can be missed; findings carry the time they
+  were *detected*, not when the change happened.
+- Process attribution is best effort and labelled: network sockets are attributed only
+  through readable `/proc/PID/fd` links (others' processes are usually unreadable without
+  root, so they are "unattributed"); ransomware attribution is a heuristic over processes
+  with a working directory or open file inside the watched directory at detection time.
+- Without root many locations are unreadable (`/etc/sudoers`, other users' home
+  directories, root-owned unit drop-ins). They are listed as coverage gaps and the
+  affected checks are reported as not assessed.
+- Baselines are trust-on-first-use. A change made before the baseline is accepted as
+  normal; the Merkle anchor detects replacement of the integrity baseline only if the
+  anchor or its HMAC key is kept somewhere the attacker cannot write.
+- Anomaly scores rank how unusual a process is against a reviewed baseline; they are
+  not malware probabilities. Behaviour heuristics (beaconing, ransomware) produce false
+  positives from backups, sync clients, update checkers and build tools; use the
+  allowlists.
+- No module blocks, kills, quarantines or changes permissions. The ransomware simulator
+  only touches files it creates in its own lab directory under the temp directory.
+
 ## Privacy and safe use
 
 Only monitor systems and ingest telemetry you are permitted to inspect. Prefer a
@@ -65,7 +91,10 @@ normal user, not root. Argument collection is off by default because argv can ex
 passwords, tokens, URLs and personal data. Process names, UIDs, paths and even synthetic
 metadata can be sensitive when real sources replace the examples.
 
-The engine does not collect file contents or environment variables. It has no network
+The engine does not collect environment variables, packet payloads, private-key
+contents or password hashes. File contents are read only to hash configured integrity
+paths and to sample entropy (at most 64 KiB, rate-limited) in directories you configure
+for ransomware monitoring; neither stores the contents. It has no network
 client and no telemetry upload. New database files use mode 0600; existing permissions
 are preserved and SQLite is not encrypted. Use a protected local directory (for example
 `mkdir -m 700 private-reports`), restrict access to exports and use device encryption.

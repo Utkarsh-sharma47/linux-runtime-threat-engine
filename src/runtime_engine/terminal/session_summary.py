@@ -25,6 +25,7 @@ from runtime_engine.terminal.formatting import (
     severity_text,
     timestamp,
 )
+from runtime_engine.terminal.views.security_view import render_summary_section
 
 STATUS_LABELS = {
     "STOPPED_GRACEFULLY": ("STOPPED GRACEFULLY", "bold green"),
@@ -150,7 +151,19 @@ def render_session_report(summary: dict[str, Any], *, title: str | None = None) 
             str(security["matches_by_severity"].get(level.value, 0)),
             str(security["alerts_by_severity"].get(level.value, 0)),
         )
-    parts += [severity, _section("TOP SUSPICIOUS PROCESSES")]
+    parts.append(severity)
+    modules = summary.get("security_modules") or {}
+    if any(entry.get("enabled") == "enabled" for entry in modules.values()):
+        parts += [
+            _section("SECURITY MODULES"),
+            render_summary_section(modules),
+            Text(
+                "Promoted findings are included in the incidents above. Inspect stored "
+                "findings with: runtime-engine <module> report",
+                style="dim",
+            ),
+        ]
+    parts.append(_section("TOP SUSPICIOUS PROCESSES"))
     if summary["top_processes"]:
         top = Table(box=None, padding=(0, 2), show_edge=False)
         for column in ("PID", "PROCESS", "ALERTS", "MATCHES", "SEVERITY", "INCIDENTS"):

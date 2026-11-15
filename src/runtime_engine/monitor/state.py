@@ -23,6 +23,7 @@ from runtime_engine.events.schema import Alert, Event, EventType, Incident, Seve
 from runtime_engine.monitor.notifications import Notification, NotificationCenter
 from runtime_engine.pipeline import ProcessResult
 from runtime_engine.process.ancestry import parent_key
+from runtime_engine.security.findings import SecurityState
 
 
 class Verbosity(IntEnum):
@@ -34,6 +35,7 @@ class Verbosity(IntEnum):
     @classmethod
     def parse(cls, name: str) -> "Verbosity":
         return cls[name.upper()]
+
 
 class ProcessLifecycle(StrEnum):
     RUNNING = "running"
@@ -196,6 +198,8 @@ class DashboardSnapshot:
     latency: LatencySummary
     peak_rss_kb: int | None
     error: str | None
+    security: dict[str, dict[str, Any]] = field(default_factory=dict)
+    atomic_sessions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def peak_rss_kb() -> int | None:
@@ -252,8 +256,23 @@ class DashboardState:
         self.latest_event_time: datetime | None = None
         self.exported_reports: list[str] = []
         self.notifications = notifications or NotificationCenter()
+        self.security = SecurityState()
+        self.atomic_sessions: dict[str, dict[str, Any]] = {}
         self.evicted_marks: dict[Verbosity, int] = {}  # newest evicted seq per verbosity
         self._seq = 0
+
+    def upsert_atomic_session(self, body: dict[str, Any]) -> None:
+        """Mirror a live Atomic execution session for the terminal (process-attributed)."""
+        with self.lock:
+            self.atomic_sessions[body["run_id"]] = dict(body)
+
+    def atomic_session_list(self) -> list[dict[str, Any]]:
+        with self.lock:
+            return sorted(
+                (dict(item) for item in self.atomic_sessions.values()),
+                key=lambda item: item.get("started_at") or "",
+                reverse=True,
+            )
 
     # ----- producer side (collector / pipeline threads) -----
 
@@ -419,8 +438,12 @@ class DashboardState:
                 Verbosity.DEBUG,
             )
 
-    def apply(self, result: ProcessResult, baseline: bool = False) -> None:
-        """Mirror one pipeline result. Called only from the pipeline thread."""
+    def apply(self, result: ProcessResult, baseline: bool = False, *, counted: bool = True) -> None:
+        """Mirror one pipeline result. Called only from the pipeline thread.
+
+        `counted=False` is for promoted security findings: they never entered the event queue
+        as accepted collector events, so they must not change the event counters.
+        """
         now = self.clock()
         with self.lock:
             event = result.event
@@ -444,8 +467,9 @@ class DashboardState:
                     event_id=event.event_id,
                 )
                 return
-            self.counters.processed += 1
-            self._observe_latency(result.latency_seconds)
+            if counted:
+                self.counters.processed += 1
+                self._observe_latency(result.latency_seconds)
             if self.latest_event_time is None or event.timestamp > self.latest_event_time:
                 self.latest_event_time = event.timestamp
             for alert in result.alerts:
@@ -661,6 +685,7 @@ class DashboardState:
     ) -> DashboardSnapshot:
         verbosity = self.info.verbosity if verbosity is None else verbosity
         now = self.clock()
+        security = self.security.overview()
         with self.lock:
             recent = [self.processes[k] for k in reversed(self.recent_processes)]
             suspicious = sorted(
@@ -688,6 +713,12 @@ class DashboardState:
                 latency=self.latency(),
                 peak_rss_kb=peak_rss_kb(),
                 error=self.error,
+                security=security,
+                atomic_sessions=sorted(
+                    (dict(item) for item in self.atomic_sessions.values()),
+                    key=lambda item: item.get("started_at") or "",
+                    reverse=True,
+                ),
             )
 
     def process(self, key: str) -> ProcessRecord | None:
@@ -716,7 +747,7 @@ class DashboardState:
 
     def build_process_tree(self, include_baseline: bool = False) -> dict[str, Any]:
         """Build a process tree dictionary from observed records.
-        
+
         Returns a dict structure:
             {
                 process_key: {
@@ -734,7 +765,7 @@ class DashboardState:
                 # Skip baseline processes unless requested
                 if not include_baseline and record.baseline:
                     continue
-                
+
                 # Determine lifecycle status
                 now = self.clock()
                 lifecycle = ProcessLifecycle.RUNNING
@@ -743,7 +774,7 @@ class DashboardState:
                         lifecycle = ProcessLifecycle.EXITED
                     else:
                         lifecycle = ProcessLifecycle.GONE
-                
+
                 tree[key] = {
                     "event": record.event,
                     "lifecycle": lifecycle,
@@ -755,7 +786,7 @@ class DashboardState:
                         "exit_status": record.exit_status,
                         "exit_observed_at": record.exit_observed_at,
                         "baseline": record.baseline,
-                    }
+                    },
                 }
             return tree
 
@@ -787,6 +818,14 @@ class DashboardState:
 
     def summary(self, status: str | None = None) -> dict[str, Any]:
         """JSON-serializable record of what was measured. Unmeasured values are None."""
+        security_modules = {
+            module: entry
+            | {
+                "last_scan": entry["last_scan"].isoformat() if entry["last_scan"] else None,
+                "worst": entry["worst"].value if entry["worst"] else None,
+            }
+            for module, entry in self.security.overview().items()
+        }
         with self.lock:
             info, counters = self.info, self.counters
             end = self.stopped_at or self.clock()
@@ -847,6 +886,7 @@ class DashboardState:
                         for s in Severity
                     },
                 },
+                "security_modules": security_modules,
                 "incident_ids": sorted(self.incidents),
                 "incidents": [
                     {

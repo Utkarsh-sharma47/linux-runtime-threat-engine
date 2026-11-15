@@ -29,11 +29,19 @@ inert synthetic data and a real read-only `/proc` discovery collector.
 - An interactive Rich terminal dashboard for live monitoring with process, incident,
   event, alert and metrics inspection, a final session report and persistent session
   history (see [Live terminal monitoring](#live-terminal-monitoring)).
+- Six scheduled, read-only [security modules](#security-modules): persistence and privilege
+  monitoring, network behaviour with process attribution and beacon analysis, Isolation
+  Forest anomaly detection, Merkle-tree file integrity, attack-surface analysis and
+  ransomware early warning. Their findings flow into the same correlation and dashboard
+  (key `s`), and each has a standalone CLI command.
 - pytest, Ruff, strict mypy, a wheel smoke test and GitHub Actions configuration.
 
 Live collection is **process discovery by polling**, not complete process-event capture.
-Live FILE_ACCESS, PRIVILEGE_CHANGE and NETWORK_CONNECTION collection is **not**
-implemented. Those event types work through replay. Missing telemetry is never inferred.
+NETWORK_CONNECTION events are produced live only as **socket snapshots** of
+`/proc/net/{tcp,tcp6,udp,udp6}` every network-module interval (default 10 s); connections
+that open and close between snapshots are missed. Live FILE_ACCESS and PRIVILEGE_CHANGE
+collection is **not** implemented; those event types work through replay. There is no
+eBPF, audit or other kernel instrumentation. Missing telemetry is never inferred.
 
 ## Architecture
 
@@ -50,6 +58,10 @@ flowchart TD
   SQLite --> Reports[Terminal and JSON incident reports]
   State -->|terminal thread| Renderer[Rich dashboard or line output]
   Rules --> Metrics[Session metrics]
+  Modules[Security modules, one thread each] -->|findings and socket events| Queue
+  Queue -->|promoted findings| Correlation
+  Modules --> SecState[Security state: latest report per module]
+  SecState --> Renderer
 ```
 
 Ancestry is updated before rule evaluation so a bound parent's observed name is
@@ -228,6 +240,9 @@ only rendering pauses.
 | `e` | Inspect recent events with filters |
 | `m` | Live metrics (queue, latency, throughput, collector errors, memory) |
 | `r` | All alerts of the session; also dismisses the alert pop-up |
+| `l` | Live event log (single keys; `b` returns) |
+| `t` | Process tree of the session |
+| `s` | Security Investigation: the six security modules, their findings and coverage |
 | `q` | Stop gracefully and print the session report |
 | Ctrl+C | Same as `q` (also SIGTERM/SIGHUP). A second Ctrl+C while stopping forces the stop |
 
@@ -363,8 +378,9 @@ lines (those remain only in the evidence tables). Replays are recorded as `REPLA
 ### Limits of the live view
 
 - `/proc` polling discovers processes that are alive at a poll; anything that starts
-  and exits between polls (default 2 s) is never seen. Live file, network and
-  privilege-change events are not collected, so rules for them only fire on replay.
+  and exits between polls (default 2 s) is never seen. Live file and privilege-change
+  events are not collected, so rules for them only fire on replay. Network connections
+  are socket snapshots taken by the network module (see [Security modules](#security-modules)).
 - The collector never drops an event it has read: when the bounded queue (default
   10,000; `--queue-capacity`) is full it waits, which delays the next poll and is shown
   as backpressure. Only a forced stop or engine failure can leave events unprocessed,
@@ -374,6 +390,45 @@ lines (those remain only in the evidence tables). Replays are recorded as `REPLA
   Rule matches and incidents are never evicted from the session state.
 - Running as a normal user leaves root-owned executable paths unreadable; this is
   reported as telemetry gaps, not hidden.
+
+## Security modules
+
+Six modules run on their own schedules inside `monitor` (disable them with
+`--no-security-modules`) and as standalone commands. All are **read-only**: they never
+change permissions, configuration, files outside their own lab directories, or
+processes. They do not read private-key contents, password hashes or packet payloads.
+Each report states what it **could not** check (permission-denied paths, unavailable
+telemetry), so missing coverage is never presented as a clean result.
+
+| Module | What it does | Default | Command | Details |
+|---|---|---|---|---|
+| Persistence & privilege | Baseline diff of systemd units, cron, shell profiles, `authorized_keys` (fingerprints only), sudoers, SUID/SGID and capabilities | on | `persistence baseline\|scan\|show` | [PERSISTENCE.md](docs/security/PERSISTENCE.md) |
+| Network behaviour | `/proc/net` socket snapshots, inode-to-PID attribution (unique, ambiguous or unattributed), beaconing by inter-arrival coefficient of variation | on | `network connections\|process\|analyze\|show` | [NETWORK.md](docs/security/NETWORK.md) |
+| Process anomalies | Isolation Forest (optional `ml` extra) or a deterministic robust-z fallback over per-process `/proc` features, with per-feature explanations | on, idle until a model is trained | `anomaly train\|status\|score\|inspect\|collect\|demo` | [ANOMALY.md](docs/security/ANOMALY.md) |
+| File integrity | SHA-256 Merkle tree over configured paths, membership proofs, HMAC-signed anchors that detect baseline replacement | on, idle until `integrity baseline` | `integrity baseline\|verify\|show\|proof\|keygen\|demo` | [INTEGRITY.md](docs/security/INTEGRITY.md) |
+| Attack surface | Unexpected SUID/SGID and file capabilities, writable PATH entries, sensitive-file and SSH key permissions (key contents never read), root listeners, risky sudoers rules, processes running from temp or deleted files; scored GOOD/FAIR/POOR/CRITICAL with an accepted baseline | on | `exposure scan\|report\|baseline\|show` | [EXPOSURE.md](docs/security/EXPOSURE.md) |
+| Ransomware early warning | inotify (polling fallback) on configured directories; modification/rename rates, entropy rises and extension changes scored together | off until directories are configured | `ransomware demo\|simulate\|watch\|report\|cleanup` | [RANSOMWARE.md](docs/security/RANSOMWARE.md) |
+
+Findings have stable IDs and revisions. Findings at or above
+`security.promote_min_severity` (default MEDIUM) become `SECURITY_FINDING` events and
+alerts that enter the normal incident correlation; all findings are stored in SQLite.
+Severity overrides and allowlists (`glob` or `RULE:glob`) are configured per module under
+`security:` in the YAML configuration.
+
+Safe demonstrations (no root, no system changes):
+
+```bash
+python -m runtime_engine.main network analyze --demo          # beacon vs. jitter series
+python -m runtime_engine.main anomaly demo                    # synthetic outliers, both algorithms
+python -m runtime_engine.main integrity demo                  # Merkle proofs and tamper detection in a temp dir
+python -m runtime_engine.main --db demo.db ransomware demo    # simulator in a temp lab, then cleanup
+python -m runtime_engine.main --db demo.db exposure scan      # read-only posture of this host
+```
+
+Measured on the development host (Ubuntu, Python 3.12, non-root): one scan costs about
+70-110 ms for persistence, network and anomaly, 440 ms for a full exposure scan (140 ms
+incremental) and under 1 ms for an idle ransomware watch; peak RSS of all modules in
+one process was 42 MB.
 
 ## Reproducible demonstrations
 
@@ -448,8 +503,15 @@ hosted CI has run. The workflow tests Linux on Python 3.11 and 3.13.
 - [Rules, tuning and MITRE scope](docs/DETECTION_RULES.md)
 - [Event schema](docs/EVENT_SCHEMA.md)
 - [Telemetry, privacy and scale limits](docs/LIMITATIONS.md)
+- Security modules: [persistence](docs/security/PERSISTENCE.md),
+  [network](docs/security/NETWORK.md), [anomaly](docs/security/ANOMALY.md),
+  [integrity](docs/security/INTEGRITY.md), [exposure](docs/security/EXPOSURE.md),
+  [ransomware](docs/security/RANSOMWARE.md)
+- [Development guide](docs/DEVELOPMENT.md)
 - [Original requested requirements](docs/REQUIREMENTS.md)
 - [Contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md)
+- [Atomic Red Team test lab](testing/atomic-red-team/README.md): run one reviewed
+  Atomic test while monitoring and grade what the engine observed
 
 Roadmap: an authorized audit-event collector, optional eBPF adapter, bounded caches
 and retention, persistent cross-session correlation, richer allowlists and resource
