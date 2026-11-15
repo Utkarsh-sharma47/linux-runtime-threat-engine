@@ -47,7 +47,7 @@ def test_dashboard_initialization_shows_empty_states():
     assert "No incidents correlated in this session." in text
     assert "No processes observed yet." in text
     assert "No new events yet. Monitoring continues." in text
-    assert "[q] Quit" in text and "[n] Network" in text and "[a] Atomic" in text
+    assert "[q] Quit" in text and "[5] Network" in text and "[8] Atomic" in text
 
 
 def test_dashboard_refresh_reflects_new_pipeline_results(database):

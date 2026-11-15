@@ -243,7 +243,10 @@ def run_cli(args, **kwargs):
 
 @LINUX
 def test_real_proc_monitor_non_interactive(tmp_path):
-    process = run_cli(["--db", str(tmp_path / "live.db"), "monitor", "--duration", "1"])
+    # Disable scheduled security modules so this test measures /proc monitoring only.
+    process = run_cli(
+        ["--db", str(tmp_path / "live.db"), "monitor", "--duration", "1", "--no-security-modules"]
+    )
     out, err = process.communicate(timeout=30)
     assert process.returncode == 0, err
     assert "BASELINE_SNAPSHOT" in out and "PROCESSES_VISIBLE=" in out
@@ -254,7 +257,7 @@ def test_real_proc_monitor_non_interactive(tmp_path):
 @pytest.mark.parametrize("sig,label", [(signal.SIGTERM, "SIGTERM"), (signal.SIGINT, "Ctrl+C")])
 def test_real_proc_monitor_stops_gracefully_on_signal(tmp_path, sig, label):
     db = tmp_path / "signal.db"
-    process = run_cli(["--db", str(db), "monitor"])
+    process = run_cli(["--db", str(db), "monitor", "--no-security-modules"])
     deadline = time.monotonic() + 20
     database = Database(db)
     try:

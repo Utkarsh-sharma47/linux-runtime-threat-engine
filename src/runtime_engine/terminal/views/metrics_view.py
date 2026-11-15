@@ -123,17 +123,17 @@ def render_help(telemetry: str) -> RenderableType:
     commands.add_column(style="bold")
     commands.add_column()
     for key, text in (
-        ("h", "This help page"),
-        ("p", "Inspect a process by PID: identity, rules, events, ancestry, children"),
-        ("i", "Inspect a correlated incident: evidence timeline, tree, why it was flagged"),
-        ("e", "Inspect recent events with filters (pid, name, type, severity, time, incident)"),
-        ("m", "Live metrics: queue, latency, throughput, collector errors, memory"),
-        ("r", "All alerts of this session (also clears pinned alert notifications)"),
-        ("l", "Live event log (scrolls; b returns)"),
-        ("t", "Process tree of this session"),
-        ("s", "Security Investigation: the six security modules, their findings and coverage"),
-        ("n", "Network investigation: connections, attribution, detections, Atomic sessions"),
-        ("a", "Atomic execution sessions registered with this live monitor"),
+        ("1 / h", "Help"),
+        ("2 / l", "Live event log (scrolls; b returns)"),
+        ("3 / p", "Processes: identity, rules, events, ancestry, children"),
+        ("4 / t", "Process ancestry tree"),
+        ("5 / n", "Host interfaces (RX/TX), connections, attribution, Atomic links"),
+        ("6 / s", "Security modules (all six investigation pages)"),
+        ("7 / i", "Incidents: evidence timeline and correlated rules"),
+        ("8 / a", "Atomic / lab execution sessions"),
+        ("9 / m", "Metrics: queue, latency, collector errors, memory"),
+        ("e", "Event filters (pid, name, type, severity, time, incident)"),
+        ("r", "Alerts (clears pinned notifications)"),
         ("q", "Stop monitoring gracefully and print the session report"),
         ("Ctrl+C", "Same as q. A second Ctrl+C during shutdown forces the stop."),
     ):

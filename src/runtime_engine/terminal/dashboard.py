@@ -28,15 +28,15 @@ from runtime_engine.terminal.live_logs import entry_text, log_panel
 from runtime_engine.terminal.views.security_view import any_enabled, status_line
 
 COMMANDS = (
-    ("h", "Help"),
-    ("p", "Process"),
-    ("i", "Incident"),
-    ("e", "Events"),
-    ("m", "Metrics"),
-    ("r", "Alerts"),
-    ("s", "Security"),
-    ("n", "Network"),
-    ("a", "Atomic"),
+    ("1", "Help"),
+    ("2", "Events"),
+    ("3", "Process"),
+    ("4", "Tree"),
+    ("5", "Network"),
+    ("6", "Security"),
+    ("7", "Incident"),
+    ("8", "Atomic"),
+    ("9", "Metrics"),
     ("q", "Quit"),
 )
 SEVERITIES = list(reversed(Severity))  # CRITICAL first
@@ -77,11 +77,55 @@ def header(snap: DashboardSnapshot) -> RenderableType:
         if len(snap.atomic_sessions) > 3:
             atomic.append(f" +{len(snap.atomic_sessions) - 3} more", style="dim")
         lines.append(atomic)
+    if snap.lab_status:
+        lines.append(lab_status_line(snap.lab_status, snap.counters, len(snap.incidents)))
     return Panel(
         Group(*lines),
         title="LINUX RUNTIME THREAT DETECTION ENGINE (read-only)",
         border_style="bold blue",
     )
+
+
+def lab_status_line(lab: dict[str, object], counters: object, incidents: int) -> Text:
+    """Compact security-lab demonstration panel (provenance-aware)."""
+    line = Text(no_wrap=True, overflow="ellipsis")
+    line.append("SECURITY LAB: ", style="bold magenta")
+    line.append(str(lab.get("session_id") or "?"), style="magenta")
+    line.append(f"  phase={lab.get('phase') or 'idle'}")
+    current = lab.get("current_scenario")
+    if current:
+        line.append(f"  scenario={current}", style="bold")
+        started = lab.get("scenario_started_at")
+        if started:
+            line.append(f"@{str(started)[11:19]}")
+    raw_scenarios = lab.get("scenarios")
+    done: dict[str, object] = raw_scenarios if isinstance(raw_scenarios, dict) else {}
+    if done:
+        finished = sum(
+            1 for s in done.values() if isinstance(s, dict) and s.get("status") == "completed"
+        )
+        line.append(f"  done={finished}/{len(done)}")
+    observed = getattr(counters, "observed", 0)
+    matches = getattr(counters, "rule_matches", 0)
+    line.append(f"  events={observed} matches={matches} incidents={incidents}")
+    raw_procs = lab.get("active_processes")
+    raw_conns = lab.get("active_connections")
+    procs: list[object] = raw_procs if isinstance(raw_procs, list) else []
+    conns: list[object] = raw_conns if isinstance(raw_conns, list) else []
+    if procs:
+        line.append(f"  procs={len(procs)}")
+    if conns:
+        line.append(f"  conns={len(conns)}")
+    raw_health = lab.get("collector_health")
+    health: dict[str, object] = raw_health if isinstance(raw_health, dict) else {}
+    if health:
+        line.append("  collectors=", style="dim")
+        line.append(
+            ",".join(f"{k}:{v}" for k, v in list(health.items())[:2]),
+            style="dim",
+        )
+    line.append("  [REAL|SYNTHETIC|ATOMIC]", style="dim")
+    return line
 
 
 def overview(snap: DashboardSnapshot, inline_severity: bool = False) -> RenderableType:
@@ -290,6 +334,8 @@ def render_dashboard(
     if any_enabled(snap.security):
         header_size += 1
     if snap.atomic_sessions:
+        header_size += 1
+    if snap.lab_status:
         header_size += 1
     sections: list[Layout] = [Layout(header(snap), name="header", size=header_size)]
     used = header_size + 1

@@ -154,12 +154,66 @@ def test_security_page_from_stored_data_without_live_state(database, tmp_path):
     assert f"FINDING {high.finding_id}" in text and "HISTORY" in text
 
 
+def test_atomic_sessions_page_empty(database, tmp_path):
+    state = DashboardState(make_info())
+    page, console = inspector(state, database, [""], tmp_path)
+    page.atomic_sessions_page()
+    assert "ATOMIC" in text_of(console).upper() or "session" in text_of(console).lower()
+
+
+def test_network_investigation_page_shows_interfaces(database, tmp_path):
+    state, _, _ = populated_state()
+    net = ScanReport(
+        "network",
+        "ok",
+        datetime.now(UTC),
+        0.01,
+        [],
+        Coverage(checked=1),
+        {
+            "connections": [],
+            "interfaces": {
+                "route": {
+                    "default_interface": "wlan0",
+                    "default_gateway": "192.168.1.1",
+                    "source": "/proc/net/route",
+                },
+                "limitation": "socket snapshot",
+                "errors": [],
+                "interfaces": [
+                    {
+                        "name": "wlan0",
+                        "state": "up",
+                        "if_type": "wifi",
+                        "ipv4": ["192.168.1.10"],
+                        "rx_bps": 100.0,
+                        "tx_bps": 50.0,
+                        "rx_bytes": 1,
+                        "tx_bytes": 2,
+                        "rx_errors": 0,
+                        "tx_errors": 0,
+                        "rx_dropped": 0,
+                        "tx_dropped": 0,
+                        "is_default": True,
+                    }
+                ],
+            },
+        },
+    )
+    state.security.record_report(net)
+    page, console = inspector(state, database, [""], tmp_path)
+    page.network_investigation_page()
+    text = text_of(console)
+    assert "HOST NETWORK INTERFACES" in text or "wlan0" in text
+    assert "DEFAULT ROUTE" in text or "wlan0" in text
+
+
 def test_dashboard_header_and_footer_show_security_modules():
     state, _, _ = populated_state()
     text = render(render_dashboard(state.snapshot(), 160, 45), 160, 45)
     assert "SECURITY MODULES [s]:" in text and "persistence OK 2" in text
-    assert "ransomware off" in text and "[s] Security" in text
-    assert "[n] Network" in text and "[a] Atomic" in text and "[q] Quit" in text
+    assert "ransomware off" in text and "[6] Security" in text
+    assert "[5] Network" in text and "[8] Atomic" in text and "[q] Quit" in text
     compact = render(render_dashboard(state.snapshot(), 60, 15), 60, 15)
     assert "SECURITY MODULES [s]" in compact
     plain = DashboardState(make_info())  # no modules running: no status line
@@ -167,13 +221,14 @@ def test_dashboard_header_and_footer_show_security_modules():
 
 
 def test_s_key_is_a_dashboard_page_and_documented_in_help():
-    assert "s" in PAGES and ("s", "Security modules") in DASHBOARD_COMMANDS
-    assert "n" in PAGES and ("n", "Network investigation") in DASHBOARD_COMMANDS
-    assert "a" in PAGES and ("a", "Atomic sessions") in DASHBOARD_COMMANDS
+    assert "s" in PAGES and ("6/s", "Security modules") in DASHBOARD_COMMANDS
+    assert "n" in PAGES and ("5/n", "Network interfaces + activity") in DASHBOARD_COMMANDS
+    assert "a" in PAGES and ("8/a", "Atomic sessions") in DASHBOARD_COMMANDS
+    assert "5" in PAGES and "6" in PAGES and "8" in PAGES
     help_text = render(render_help("test"), 160, 60)
-    assert "Security Investigation" in help_text
-    assert "Network investigation" in help_text
-    assert "Atomic execution sessions" in help_text
+    assert "Security modules" in help_text
+    assert "Host interfaces" in help_text or "Network" in help_text
+    assert "Atomic" in help_text
 
 
 def test_session_summary_includes_security_modules():

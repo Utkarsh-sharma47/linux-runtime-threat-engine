@@ -43,6 +43,7 @@ from runtime_engine.terminal.renderer import DashboardRenderer, PlainLogRenderer
 from runtime_engine.terminal.views import (
     event_view,
     incident_view,
+    interfaces_view,
     metrics_view,
     network_investigation,
     network_view,
@@ -55,22 +56,33 @@ Prompt = Callable[[str], str]
 
 # Core command sets used across all screens
 DASHBOARD_COMMANDS = (
-    ("h", "Help"),
-    ("p", "Processes"),
-    ("i", "Incidents"),
-    ("e", "Events"),
-    ("l", "Live logs"),
+    ("1/h", "Help / overview hints"),
+    ("2/l", "Live events"),
+    ("3/p", "Processes"),
+    ("4/t", "Process ancestry"),
+    ("5/n", "Network interfaces + activity"),
+    ("6/s", "Security modules"),
+    ("7/i", "Incidents"),
+    ("8/a", "Atomic sessions"),
+    ("9/m", "Metrics / health"),
+    ("e", "Event filters"),
     ("r", "Alerts"),
-    ("m", "Metrics"),
-    ("t", "Process tree"),
-    ("s", "Security modules"),
-    ("n", "Network investigation"),
-    ("a", "Atomic sessions"),
     ("q", "Stop monitoring"),
 )
 
-# Set of page keys that open inspection pages (used for dashboard loop)
-PAGES = {"p", "i", "e", "m", "r", "l", "t", "s", "n", "a"}
+# Letter keys plus numeric aliases (1–9) for the same pages.
+_NUMERIC = {
+    "1": "h",
+    "2": "l",
+    "3": "p",
+    "4": "t",
+    "5": "n",
+    "6": "s",
+    "7": "i",
+    "8": "a",
+    "9": "m",
+}
+PAGES = {"p", "i", "e", "m", "r", "l", "t", "s", "n", "a"} | set(_NUMERIC)
 
 INSPECTION_COMMANDS = (
     ("b", "Back"),
@@ -171,6 +183,7 @@ class Inspector:
     def dispatch(self, key: str) -> None:
         """Dispatch a key press to the appropriate inspection page."""
         key = key.lower()
+        key = _NUMERIC.get(key, key)
         if key == "h":
             self.help_page()
         elif key == "q":
@@ -570,6 +583,7 @@ class Inspector:
             findings=self._security_findings("network"),
             atomic_sessions=self.state.atomic_session_list(),
         )
+        self.console.print(interfaces_view.render_interfaces(report.summary if report else None))
         self.console.print(
             network_investigation.render_network_investigation(
                 report, rows, atomic_sessions=self.state.atomic_session_list()
@@ -776,6 +790,7 @@ class InteractiveMonitor:
                     outcome = self._dashboard()
                     if outcome not in PAGES and outcome != "h":
                         return outcome
+                    outcome = _NUMERIC.get(outcome, outcome)
                     if outcome == "l":
                         # Live logs keep single-key input, so the keys stay in cbreak mode.
                         if self.inspector.live_logs_page(self.keys.read_key) == "user_quit":

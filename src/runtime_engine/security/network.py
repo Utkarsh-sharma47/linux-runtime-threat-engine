@@ -302,6 +302,9 @@ class NetworkMonitor:
             overrides=settings.severity_overrides, allow=settings.allow
         )
         self.collector = collector or NetCollector()
+        from runtime_engine.collector.iface_collector import IfaceCollector
+
+        self.ifaces = IfaceCollector()
         self.analyzer = BeaconAnalyzer(settings)
         self.previous: set[tuple[Any, ...]] | None = None
         self.new_total = 0
@@ -475,4 +478,5 @@ class NetworkMonitor:
                 key: {"fds": snap.fd_counts[key], "sockets": snap.socket_counts.get(key, 0)}
                 for key in snap.fd_counts
             },
+            "interfaces": self.ifaces.snapshot().as_dict(),
         }
