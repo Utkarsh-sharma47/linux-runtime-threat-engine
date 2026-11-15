@@ -1,3 +1,6 @@
 *
 !.gitignore
 !README.md
+# Ephemeral pointers written by prepare_session (never commit).
+active-monitor.yaml
+active-monitor.path

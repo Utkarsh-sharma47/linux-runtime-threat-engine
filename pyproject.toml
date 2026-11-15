@@ -21,6 +21,14 @@ runtime-engine = "runtime_engine.main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/runtime_engine"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/scripts/security-lab/config/active-monitor.yaml",
+  "/scripts/security-lab/config/active-monitor.path",
+  "/.venv",
+  "/testing/reports",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

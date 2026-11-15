@@ -53,14 +53,16 @@ def prepare_session(
         },
     )
     write_status(status, status_path(session))
-    # Convenience copies for scripts/
+    # Convenience pointer for operators (plain text — never an absolute symlink in-tree;
+    # absolute symlinks break `python -m build` / sdist packaging).
     if repo_root is not None:
         cfg_dir = repo_root / "scripts" / "security-lab" / "config"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        link = cfg_dir / "active-monitor.yaml"
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(config)
+        for name in ("active-monitor.yaml", "active-monitor.path"):
+            stale = cfg_dir / name
+            if stale.exists() or stale.is_symlink():
+                stale.unlink()
+        (cfg_dir / "active-monitor.path").write_text(str(config) + "\n", encoding="utf-8")
     return session, config, ransom, status
 
 
