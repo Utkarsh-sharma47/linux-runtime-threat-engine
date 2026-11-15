@@ -199,6 +199,7 @@ class DashboardSnapshot:
     peak_rss_kb: int | None
     error: str | None
     security: dict[str, dict[str, Any]] = field(default_factory=dict)
+    atomic_sessions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def peak_rss_kb() -> int | None:
@@ -256,8 +257,22 @@ class DashboardState:
         self.exported_reports: list[str] = []
         self.notifications = notifications or NotificationCenter()
         self.security = SecurityState()
+        self.atomic_sessions: dict[str, dict[str, Any]] = {}
         self.evicted_marks: dict[Verbosity, int] = {}  # newest evicted seq per verbosity
         self._seq = 0
+
+    def upsert_atomic_session(self, body: dict[str, Any]) -> None:
+        """Mirror a live Atomic execution session for the terminal (process-attributed)."""
+        with self.lock:
+            self.atomic_sessions[body["run_id"]] = dict(body)
+
+    def atomic_session_list(self) -> list[dict[str, Any]]:
+        with self.lock:
+            return sorted(
+                (dict(item) for item in self.atomic_sessions.values()),
+                key=lambda item: item.get("started_at") or "",
+                reverse=True,
+            )
 
     # ----- producer side (collector / pipeline threads) -----
 
@@ -699,6 +714,11 @@ class DashboardState:
                 peak_rss_kb=peak_rss_kb(),
                 error=self.error,
                 security=security,
+                atomic_sessions=sorted(
+                    (dict(item) for item in self.atomic_sessions.values()),
+                    key=lambda item: item.get("started_at") or "",
+                    reverse=True,
+                ),
             )
 
     def process(self, key: str) -> ProcessRecord | None:

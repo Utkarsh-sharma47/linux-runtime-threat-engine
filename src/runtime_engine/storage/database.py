@@ -53,6 +53,10 @@ class Database:
             CREATE TABLE IF NOT EXISTS security_baselines (
                 module TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL,
                 body TEXT NOT NULL, PRIMARY KEY (module, name));
+            CREATE TABLE IF NOT EXISTS atomic_sessions (
+                id TEXT PRIMARY KEY, started_at TEXT NOT NULL, ended_at TEXT,
+                status TEXT NOT NULL, synthetic INTEGER NOT NULL, body TEXT NOT NULL,
+                evaluation TEXT);
         """)
 
     def event(self, event_id: str) -> Event | None:
@@ -333,6 +337,60 @@ class Database:
             return None
         body: dict[str, Any] = json.loads(row[0])
         return body
+
+    def save_atomic_session(
+        self, body: dict[str, Any], *, evaluation: dict[str, Any] | None = None
+    ) -> None:
+        """Upsert a live Atomic execution session (and optional evaluation report)."""
+        with self.lock, self.connection:
+            existing = self.connection.execute(
+                "SELECT evaluation FROM atomic_sessions WHERE id=?", (body["run_id"],)
+            ).fetchone()
+            kept = evaluation
+            if kept is None and existing is not None and existing[0]:
+                kept = json.loads(existing[0])
+            self.connection.execute(
+                "INSERT INTO atomic_sessions VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET ended_at=excluded.ended_at, "
+                "status=excluded.status, synthetic=excluded.synthetic, body=excluded.body, "
+                "evaluation=COALESCE(excluded.evaluation, atomic_sessions.evaluation)",
+                (
+                    body["run_id"],
+                    body.get("started_at") or "",
+                    body.get("ended_at"),
+                    body.get("status") or "REGISTERED",
+                    1 if body.get("synthetic") else 0,
+                    json.dumps(body),
+                    json.dumps(kept) if kept is not None else None,
+                ),
+            )
+
+    def atomic_session(self, run_id: str) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.connection.execute(
+                "SELECT body, evaluation FROM atomic_sessions WHERE id=?", (run_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        body: dict[str, Any] = json.loads(row[0])
+        if row[1]:
+            body["evaluation"] = json.loads(row[1])
+        return body
+
+    def atomic_sessions(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT body, evaluation FROM atomic_sessions "
+                "ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for body, evaluation in rows:
+            item: dict[str, Any] = json.loads(body)
+            if evaluation:
+                item["evaluation"] = json.loads(evaluation)
+            result.append(item)
+        return result
 
     def close(self) -> None:
         with self.lock:
