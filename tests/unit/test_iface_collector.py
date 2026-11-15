@@ -79,3 +79,76 @@ def test_throughput_is_delta_not_cumulative(tmp_path: Path, monkeypatch):
     assert iface.rx_bytes == 3000  # cumulative still available separately
     assert "n/a" in format_bps(None)
     assert "KiB/s" in format_bps(2048.0)
+    assert "MiB/s" in format_bps(2 * 1024**2)
+    assert "B/s" in format_bps(10.0)
+
+
+def test_netdev_unreadable_and_route_gaps(tmp_path: Path):
+    proc = tmp_path / "proc"
+    net = proc / "net"
+    net.mkdir(parents=True)
+    # No /proc/net/dev → error recorded; sys-only interface still listed.
+    sys_class = tmp_path / "sys" / "class" / "net"
+    wlan = sys_class / "wlan0"
+    wlan.mkdir(parents=True)
+    (wlan / "operstate").write_text("up\n", encoding="utf-8")
+    (wlan / "mtu").write_text("1500\n", encoding="utf-8")
+    (wlan / "type").write_text("999\n", encoding="utf-8")  # not in ARP map → check wireless
+    (wlan / "address").write_text("aa:bb:cc:dd:ee:ff\n", encoding="utf-8")
+    (wlan / "wireless").mkdir()
+    (net / "route").write_text("Iface\tDestination\tGateway\tFlags\n", encoding="utf-8")
+    collector = IfaceCollector(proc=proc, sys_class=sys_class)
+    snap = collector.snapshot()
+    assert snap.errors
+    assert any(i.name == "wlan0" and i.if_type == "wifi" for i in snap.interfaces)
+    body = snap.as_dict()
+    assert "limitation" in body and body["interfaces"]
+    # default_route with missing file
+    missing = default_route(tmp_path / "missing")
+    assert missing.default_interface is None
+    # skip non-default destinations / short lines
+    (net / "route").write_text(
+        "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n"
+        "bad\n"
+        "eth0\t0101A8C0\t0100A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n",
+        encoding="utf-8",
+    )
+    assert default_route(proc).default_interface is None
+    # garbage netdev lines ignored
+    assert parse_netdev("not a table\nnocolon\n x: a b\n") == {}
+
+
+def test_network_monitor_summary_includes_interfaces(tmp_path: Path, monkeypatch):
+    from runtime_engine.config.settings import NetworkSettings
+    from runtime_engine.security.network import NetworkMonitor
+
+    proc = tmp_path / "proc"
+    net = proc / "net"
+    net.mkdir(parents=True)
+    (net / "dev").write_text(_HDR + _LO_1, encoding="utf-8")
+    (net / "route").write_text(
+        "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n",
+        encoding="utf-8",
+    )
+    sys_class = tmp_path / "sys" / "class" / "net"
+    (sys_class / "lo").mkdir(parents=True)
+    (sys_class / "lo" / "operstate").write_text("unknown\n", encoding="utf-8")
+    (sys_class / "lo" / "type").write_text("772\n", encoding="utf-8")
+
+    from datetime import UTC, datetime
+
+    from runtime_engine.collector.net_collector import Snapshot
+
+    snap = Snapshot(
+        taken_at=datetime.now(UTC),
+        host="test-host",
+        sockets=[],
+        denied_processes=0,
+        fd_counts={},
+        socket_counts={},
+    )
+    monitor = NetworkMonitor(NetworkSettings())
+    monitor.ifaces = IfaceCollector(proc=proc, sys_class=sys_class)
+    summary = monitor._summary(snap, [], 0, 0.0)
+    assert "interfaces" in summary
+    assert summary["interfaces"]["interfaces"]

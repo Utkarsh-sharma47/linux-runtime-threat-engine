@@ -154,6 +154,60 @@ def test_security_page_from_stored_data_without_live_state(database, tmp_path):
     assert f"FINDING {high.finding_id}" in text and "HISTORY" in text
 
 
+def test_atomic_sessions_page_empty(database, tmp_path):
+    state = DashboardState(make_info())
+    page, console = inspector(state, database, [""], tmp_path)
+    page.atomic_sessions_page()
+    assert "ATOMIC" in text_of(console).upper() or "session" in text_of(console).lower()
+
+
+def test_network_investigation_page_shows_interfaces(database, tmp_path):
+    state, _, _ = populated_state()
+    net = ScanReport(
+        "network",
+        "ok",
+        datetime.now(UTC),
+        0.01,
+        [],
+        Coverage(checked=1),
+        {
+            "connections": [],
+            "interfaces": {
+                "route": {
+                    "default_interface": "wlan0",
+                    "default_gateway": "192.168.1.1",
+                    "source": "/proc/net/route",
+                },
+                "limitation": "socket snapshot",
+                "errors": [],
+                "interfaces": [
+                    {
+                        "name": "wlan0",
+                        "state": "up",
+                        "if_type": "wifi",
+                        "ipv4": ["192.168.1.10"],
+                        "rx_bps": 100.0,
+                        "tx_bps": 50.0,
+                        "rx_bytes": 1,
+                        "tx_bytes": 2,
+                        "rx_errors": 0,
+                        "tx_errors": 0,
+                        "rx_dropped": 0,
+                        "tx_dropped": 0,
+                        "is_default": True,
+                    }
+                ],
+            },
+        },
+    )
+    state.security.record_report(net)
+    page, console = inspector(state, database, [""], tmp_path)
+    page.network_investigation_page()
+    text = text_of(console)
+    assert "HOST NETWORK INTERFACES" in text or "wlan0" in text
+    assert "DEFAULT ROUTE" in text or "wlan0" in text
+
+
 def test_dashboard_header_and_footer_show_security_modules():
     state, _, _ = populated_state()
     text = render(render_dashboard(state.snapshot(), 160, 45), 160, 45)
