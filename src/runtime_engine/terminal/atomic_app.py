@@ -1,11 +1,15 @@
-"""`atomic` commands: offline Atomic Red Team execution, evidence analysis and reports.
+"""`atomic` commands: offline Atomic Red Team evaluation and live synthetic acceptance.
 
-None of these commands starts or needs the live monitor.
+Offline actions do not need the live monitor. `live-accept` starts a short-lived
+MonitorSession, registers a fake Atomic session, and feeds clearly labeled SYNTHETIC
+telemetry through the shared pipeline. It never executes a real Atomic attack.
 """
 
 import argparse
 import json
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +17,24 @@ from rich.console import Console
 
 from runtime_engine.atomic import analysis, preflight, runner
 from runtime_engine.atomic.evidence import read_json
-from runtime_engine.atomic.profiles import load_profiles, parse_overrides
+from runtime_engine.atomic.live import (
+    LiveAtomicBridge,
+    synthetic_network_event,
+    synthetic_process_event,
+)
+from runtime_engine.atomic.profiles import (
+    ModuleExpectation,
+    Profile,
+    load_profiles,
+    parse_overrides,
+)
 from runtime_engine.config.settings import Settings
 from runtime_engine.detection.rule_loader import Rule
+from runtime_engine.monitor.session import MonitorSession
+from runtime_engine.monitor.state import DashboardState, SessionInfo, Verbosity
+from runtime_engine.pipeline import Pipeline
 from runtime_engine.security import ransomware_sim
+from runtime_engine.storage.database import Database
 from runtime_engine.terminal.views import atomic_view
 
 EXIT_REFUSED = 4
@@ -141,7 +159,125 @@ def command(
         run = runner.import_legacy(args.dir, args.engine_db, results)
         analysis.analyze(run, rules, settings, profiles)
         return show_report(run, console, args.json)
+    if action == "live-accept":
+        return live_accept(args, settings, rules, console)
     raise ValueError(f"unknown atomic action {action}")
+
+
+class _IdleCollector:
+    """Polls nothing; live-accept injects synthetic events via submit_event."""
+
+    errors = 0
+    rejected = 0
+    missing_telemetry = 0
+    read_failures = 0
+
+    def collect(self):  # type: ignore[no-untyped-def]
+        return iter(())
+
+
+def live_accept(
+    args: argparse.Namespace, settings: Settings, rules: list[Rule], console: Console
+) -> int:
+    """Demonstrate the full live path with a fake profile and SYNTHETIC telemetry only."""
+    db_path = args.engine_db or Path("testing/reports/live-accept.db")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path.exists():
+        db_path.unlink()
+    database = Database(db_path)
+    info = SessionInfo(
+        session_id="SES-LIVE-ACCEPT",
+        mode="LIVE",
+        hostname="synthetic-accept",
+        kernel="test",
+        engine_pid=0,
+        started_at=datetime.now(UTC),
+        verbosity=Verbosity.NORMAL,
+        poll_interval=0.05,
+        queue_capacity=200,
+        window_seconds=settings.correlation_window_seconds,
+        telemetry="synthetic injection (no /proc); NOT real host Atomic activity",
+        database_path=str(db_path),
+        reports_directory=str(args.results_dir),
+    )
+    state = DashboardState(info)
+    pipeline = Pipeline(database, rules, settings.correlation_window_seconds)
+    session = MonitorSession(
+        pipeline,
+        _IdleCollector(),
+        state,
+        poll_interval=0.05,
+        queue_capacity=200,
+    )
+    bridge = LiveAtomicBridge(session, database)
+    session.start()
+    try:
+        record = bridge.register(
+            technique="T1071.001",
+            test_number=99,
+            guid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            name="Fake Atomic profile (synthetic acceptance)",
+            synthetic=True,
+        )
+        host = "synthetic-host"
+        start = "9001"
+        events = [
+            synthetic_process_event(
+                pid=4242,
+                name="curl",
+                exe="/tmp/curl",
+                start=start,
+                host_id=host,
+                ppid=1111,
+                parent_name="bash",
+                parent_start="8000",
+            ),
+            synthetic_network_event(
+                pid=4242,
+                name="curl",
+                start=start,
+                destination="203.0.113.10",
+                host_id=host,
+            ),
+        ]
+        stats = bridge.ingest(record.run_id, events)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and state.counters.processed < stats["accepted"]:
+            time.sleep(0.01)
+        bridge.finish(record.run_id, "COMPLETED")
+        profile = Profile(
+            technique="T1071.001",
+            name="Synthetic live acceptance profile",
+            expected_rules=["RT002", "RT005", "RT006"],
+            telemetry=["PROCESS_START", "NETWORK_CONNECTION"],
+            rationale="Acceptance-only fake profile; never a real Atomic test.",
+            reviewed_risk="A",
+            modules={"rules": ModuleExpectation(rules=["RT002", "RT005", "RT006"])},
+        )
+        evaluation = bridge.evaluate(record.run_id, profile)
+        snap = state.snapshot(log_limit=0)
+        result = {
+            "evidence_label": "SYNTHETIC",
+            "note": "All evidence is synthetic; no real Atomic attack was executed.",
+            "collectors": bridge.verify_collectors(),
+            "ingest": stats,
+            "dashboard": {
+                "processed": snap.counters.processed,
+                "rule_matches": snap.counters.rule_matches,
+                "incidents": len(snap.incidents),
+                "atomic_sessions": snap.atomic_sessions,
+            },
+            "evaluation": evaluation,
+            "database": str(db_path),
+        }
+        if args.json:
+            emit(result)
+        else:
+            console.print_json(json.dumps(result, default=str))
+        return 0 if evaluation["overall"]["grade"] == "DETECTED" else 1
+    finally:
+        session.shutdown("user_quit")
+        database.close()
 
 
 def simulate(
@@ -261,15 +397,16 @@ def cleanup(
 def add_parser(sub: Any) -> None:
     atomic = sub.add_parser(
         "atomic",
-        help="Offline Atomic Red Team evaluation (no live monitor needed)",
+        help="Atomic Red Team evaluation (offline) and live synthetic acceptance",
         description="Inspect, run (approved tests only, traced with strace), analyze offline "
-        "with the engine's pipeline and security modules, and report. Results default to "
-        "~/AtomicRedTeam/lab-results.",
+        "with the engine's pipeline and security modules, and report. Use live-accept for a "
+        "SYNTHETIC end-to-end live-monitor demonstration (never executes a real Atomic attack). "
+        "Results default to ~/AtomicRedTeam/lab-results.",
     )
     atomic.add_argument(
         "action",
         choices=["inspect", "run", "analyze", "report", "runs", "summary", "cleanup",
-                 "simulate", "import-legacy"],
+                 "simulate", "import-legacy", "live-accept"],
     )  # fmt: skip
     atomic.add_argument("technique", nargs="?", help="ATT&CK technique, e.g. T1059.004")
     atomic.add_argument("--test-number", type=int, help="1-based test number in the YAML")
