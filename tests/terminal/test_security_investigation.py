@@ -158,8 +158,8 @@ def test_dashboard_header_and_footer_show_security_modules():
     state, _, _ = populated_state()
     text = render(render_dashboard(state.snapshot(), 160, 45), 160, 45)
     assert "SECURITY MODULES [s]:" in text and "persistence OK 2" in text
-    assert "ransomware off" in text and "[s] Security" in text
-    assert "[n] Network" in text and "[a] Atomic" in text and "[q] Quit" in text
+    assert "ransomware off" in text and "[6] Security" in text
+    assert "[5] Network" in text and "[8] Atomic" in text and "[q] Quit" in text
     compact = render(render_dashboard(state.snapshot(), 60, 15), 60, 15)
     assert "SECURITY MODULES [s]" in compact
     plain = DashboardState(make_info())  # no modules running: no status line
@@ -167,13 +167,14 @@ def test_dashboard_header_and_footer_show_security_modules():
 
 
 def test_s_key_is_a_dashboard_page_and_documented_in_help():
-    assert "s" in PAGES and ("s", "Security modules") in DASHBOARD_COMMANDS
-    assert "n" in PAGES and ("n", "Network investigation") in DASHBOARD_COMMANDS
-    assert "a" in PAGES and ("a", "Atomic sessions") in DASHBOARD_COMMANDS
+    assert "s" in PAGES and ("6/s", "Security modules") in DASHBOARD_COMMANDS
+    assert "n" in PAGES and ("5/n", "Network interfaces + activity") in DASHBOARD_COMMANDS
+    assert "a" in PAGES and ("8/a", "Atomic sessions") in DASHBOARD_COMMANDS
+    assert "5" in PAGES and "6" in PAGES and "8" in PAGES
     help_text = render(render_help("test"), 160, 60)
-    assert "Security Investigation" in help_text
-    assert "Network investigation" in help_text
-    assert "Atomic execution sessions" in help_text
+    assert "Security modules" in help_text
+    assert "Host interfaces" in help_text or "Network" in help_text
+    assert "Atomic" in help_text
 
 
 def test_session_summary_includes_security_modules():

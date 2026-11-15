@@ -28,15 +28,15 @@ from runtime_engine.terminal.live_logs import entry_text, log_panel
 from runtime_engine.terminal.views.security_view import any_enabled, status_line
 
 COMMANDS = (
-    ("h", "Help"),
-    ("p", "Process"),
-    ("i", "Incident"),
-    ("e", "Events"),
-    ("m", "Metrics"),
-    ("r", "Alerts"),
-    ("s", "Security"),
-    ("n", "Network"),
-    ("a", "Atomic"),
+    ("1", "Help"),
+    ("2", "Events"),
+    ("3", "Process"),
+    ("4", "Tree"),
+    ("5", "Network"),
+    ("6", "Security"),
+    ("7", "Incident"),
+    ("8", "Atomic"),
+    ("9", "Metrics"),
     ("q", "Quit"),
 )
 SEVERITIES = list(reversed(Severity))  # CRITICAL first

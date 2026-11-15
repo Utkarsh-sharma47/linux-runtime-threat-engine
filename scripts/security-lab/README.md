@@ -18,18 +18,18 @@ cd /home/utkarsh/Documents/Class/xISSC-Project/rte-security
 ./scripts/run-security-lab.sh --scenario all
 ```
 
-Then investigate in Terminal 1:
+Then investigate in Terminal 1 (`1`–`9` numeric aliases work too):
 
 | Key | What to inspect |
 |---|---|
-| `p` | Processes / identity |
-| `t` | Process ancestry |
-| `n` | Network investigation |
-| `s` | Security modules (all six) |
-| `i` | Incidents |
+| `3`/`p` | Processes / identity |
+| `4`/`t` | Process ancestry |
+| `5`/`n` | Host NICs (RX/TX) + connections |
+| `6`/`s` | Security modules (all six) |
+| `7`/`i` | Incidents |
 | `r` | Alerts |
-| `e` | Live events |
-| `a` | Atomic sessions |
+| `2`/`l` | Live events |
+| `8`/`a` | Atomic sessions |
 | `q` | Quit monitor |
 
 Cleanup (explicit confirmation):
@@ -38,27 +38,38 @@ Cleanup (explicit confirmation):
 ./scripts/cleanup-lab.sh
 ```
 
-## Individual scenarios
+## Individual scenario scripts
+
+```bash
+./scripts/security-lab/run-process-test.sh
+./scripts/security-lab/run-network-test.sh
+./scripts/security-lab/run-persistence-test.sh
+./scripts/security-lab/run-integrity-test.sh
+./scripts/security-lab/run-exposure-test.sh
+./scripts/security-lab/run-anomaly-test.sh
+./scripts/security-lab/run-ransomware-test.sh
+./scripts/security-lab/run-atomic-test.sh          # interactive, approval-gated
+./scripts/security-lab/run-atomic-test.sh --dry-run
+./scripts/security-lab/run-atomic-test.sh --live-accept   # SYNTHETIC only
+```
+
+Orchestrator equivalents:
 
 ```bash
 ./scripts/run-security-lab.sh --list
 ./scripts/run-security-lab.sh --dry-run --scenario all
 ./scripts/run-security-lab.sh --scenario process
-./scripts/run-security-lab.sh --scenario network
-./scripts/run-security-lab.sh --scenario persistence
-./scripts/run-security-lab.sh --scenario integrity
-./scripts/run-security-lab.sh --scenario exposure
-./scripts/run-security-lab.sh --scenario anomaly
-./scripts/run-security-lab.sh --scenario ransomware
+# … network | persistence | integrity | exposure | anomaly | ransomware
 ```
 
-Atomic (inspect by default; **not** part of `--scenario all`):
+Atomic via orchestrator (inspect by default; **not** part of `--scenario all`):
 
 ```bash
 ./scripts/run-security-lab.sh --scenario atomic
-# Optional offline execute after reviewing the token:
 RTE_LAB_ATOMIC_APPROVE=<token> ./scripts/run-security-lab.sh --scenario atomic
 ```
+
+Full guide: [`setup.md`](../../setup.md).
 
 ## Provenance labels
 
@@ -81,9 +92,9 @@ scripts/
     README.md
     start-monitor.sh
     run-security-lab.sh
+    run-*-test.sh    # thin wrappers per scenario
+    run-atomic-test.sh
     cleanup-lab.sh
-    config/          # active-monitor.yaml symlink
-    scenarios/       # docs pointers
 src/runtime_engine/lab/   # importable orchestrator + scenarios
 ```
 

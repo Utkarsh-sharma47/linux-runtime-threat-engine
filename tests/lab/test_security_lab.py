@@ -166,3 +166,30 @@ def test_evidence_summary_written(isolated_lab):
     summary = json.loads((session / "evidence" / "summary.json").read_text(encoding="utf-8"))
     assert summary["dry_run"] is True
     assert len(summary["scenarios"]) == len(orchestrator.SAFE_ALL)
+
+
+def test_individual_scenario_scripts_exist():
+    root = Path(__file__).resolve().parents[2]
+    lab = root / "scripts" / "security-lab"
+    for name in (
+        "start-monitor.sh",
+        "run-security-lab.sh",
+        "run-process-test.sh",
+        "run-network-test.sh",
+        "run-persistence-test.sh",
+        "run-integrity-test.sh",
+        "run-exposure-test.sh",
+        "run-anomaly-test.sh",
+        "run-ransomware-test.sh",
+        "run-atomic-test.sh",
+        "cleanup-lab.sh",
+    ):
+        path = lab / name
+        assert path.is_file(), path
+        assert path.stat().st_mode & 0o111, f"{path} must be executable"
+    assert (root / "scripts" / "start-monitor.sh").is_file()
+    assert (root / "setup.md").is_file()
+    text = (root / "setup.md").read_text(encoding="utf-8")
+    assert "./scripts/security-lab/run-process-test.sh" in text
+    assert "./scripts/start-monitor.sh" in text
+    assert "REAL HOST TELEMETRY" in text
