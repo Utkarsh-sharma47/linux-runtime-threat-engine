@@ -164,13 +164,17 @@ def proc(tmp_path):
 def test_sampler_features(proc):
     sampler = ProcessSampler(proc)
     samples, coverage = sampler.samples()
-    rows_ = sampler.features(samples, {samples[0].key: {"fds": 7, "sockets": 2}})
-    by_name = {s.name: rows_[s.key] for s in samples}
+    by_sample = {sample.name: sample for sample in samples}
+    # Directory order is not stable; attach descriptor data to init explicitly.
+    rows_ = sampler.features(samples, {by_sample["init"].key: {"fds": 7, "sockets": 2}})
+    by_name = {sample.name: rows_[sample.key] for sample in samples}
     assert by_name["dropper"]["lifetime_seconds"] == pytest.approx(10)
     assert by_name["dropper"]["cpu_percent"] == pytest.approx(90)
     assert by_name["dropper"]["exe_category"] == 3.0 and by_name["dropper"]["rss_mb"] == 2.0
     assert by_name["shell"]["child_count"] == 1.0 and by_name["init"]["child_count"] == 1.0
+    assert by_name["init"]["fd_count"] == 7.0
     assert by_name["dropper"]["fd_count"] is None  # missing, not zero
+    assert by_name["shell"]["fd_count"] is None
     assert coverage.checked == 3
 
 
