@@ -44,6 +44,8 @@ from runtime_engine.terminal.views import (
     event_view,
     incident_view,
     metrics_view,
+    network_investigation,
+    network_view,
     process_view,
     security_view,
 )
@@ -62,11 +64,13 @@ DASHBOARD_COMMANDS = (
     ("m", "Metrics"),
     ("t", "Process tree"),
     ("s", "Security modules"),
+    ("n", "Network investigation"),
+    ("a", "Atomic sessions"),
     ("q", "Stop monitoring"),
 )
 
 # Set of page keys that open inspection pages (used for dashboard loop)
-PAGES = {"p", "i", "e", "m", "r", "l", "t", "s"}
+PAGES = {"p", "i", "e", "m", "r", "l", "t", "s", "n", "a"}
 
 INSPECTION_COMMANDS = (
     ("b", "Back"),
@@ -177,6 +181,10 @@ class Inspector:
             self.process_tree_page()
         elif key == "s":
             self.security_page()
+        elif key == "n":
+            self.network_investigation_page()
+        elif key == "a":
+            self.atomic_sessions_page()
         else:
             # Show banner for inspection pages
             self._banner()
@@ -538,6 +546,85 @@ class Inspector:
             return self.state.security.report(module)
         body = self.database.baseline(module, "last-scan")
         return ScanReport.from_dict(body) if body else None
+
+    def network_investigation_page(self) -> None:
+        """Dedicated network investigation: attribution, detections, incidents, Atomic sessions."""
+        assert self.state is not None
+        report = self._security_report("network")
+        connections = list((report.summary if report else {}).get("connections") or [])
+        with self.state.lock:
+            processes = {key: proc.copy() for key, proc in self.state.processes.items()}
+            alerts = list(self.state.alerts.values())
+            incidents = list(self.state.incidents.values())
+            network_events = [
+                record
+                for record in self.state.events
+                if record.event.event_type.value == "NETWORK_CONNECTION"
+            ]
+        rows = network_investigation.build_rows(
+            connections=connections,
+            network_events=network_events,
+            processes=processes,
+            alerts=alerts,
+            incidents=incidents,
+            findings=self._security_findings("network"),
+            atomic_sessions=self.state.atomic_session_list(),
+        )
+        self.console.print(
+            network_investigation.render_network_investigation(
+                report, rows, atomic_sessions=self.state.atomic_session_list()
+            )
+        )
+        # Keep the existing module page available for beacon/frequency detail.
+        if report is not None:
+            self.console.print(
+                network_view.render_network(
+                    report,
+                    self._security_findings("network"),
+                    incidents={
+                        key: [i.incident_id for i in incidents if key in i.process_keys]
+                        for key in processes
+                    },
+                )
+            )
+        self.ask("Press Enter to return to the dashboard ")
+
+    def atomic_sessions_page(self) -> None:
+        """List live Atomic execution sessions registered with this monitor."""
+        assert self.state is not None
+        sessions = self.state.atomic_session_list()
+        table = Table(title="ATOMIC EXECUTION SESSIONS", title_justify="left", expand=True)
+        for column in (
+            "RUN ID",
+            "TECHNIQUE",
+            "STATUS",
+            "SYNTHETIC",
+            "EVENTS",
+            "ALERTS",
+            "INCIDENTS",
+            "PROCESS KEYS",
+        ):
+            table.add_column(column, no_wrap=True, overflow="ellipsis")
+        if not sessions:
+            table.add_row("-", "-", "-", "-", "0", "0", "0", "none registered")
+        for item in sessions:
+            table.add_row(
+                clean(item.get("run_id") or "-", 36),
+                clean(item.get("technique") or "-", 12),
+                str(item.get("status") or "-"),
+                "YES" if item.get("synthetic") else "no",
+                str(len(item.get("event_ids") or [])),
+                str(len(item.get("alert_ids") or [])),
+                str(len(item.get("incident_ids") or [])),
+                str(len(item.get("process_keys") or [])),
+            )
+        note = Text(
+            "Sessions are correlated by stable process_key / event_id, not by time window. "
+            "SYNTHETIC sessions are acceptance evidence and are not real Atomic attacks.",
+            style="dim",
+        )
+        self.console.print(table, note)
+        self.ask("Press Enter to return to the dashboard ")
 
     def security_page(self) -> None:
         """Menu of the six security modules; cached results only, never triggers a scan."""

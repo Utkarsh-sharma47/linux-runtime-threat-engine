@@ -132,6 +132,8 @@ def render_help(telemetry: str) -> RenderableType:
         ("l", "Live event log (scrolls; b returns)"),
         ("t", "Process tree of this session"),
         ("s", "Security Investigation: the six security modules, their findings and coverage"),
+        ("n", "Network investigation: connections, attribution, detections, Atomic sessions"),
+        ("a", "Atomic execution sessions registered with this live monitor"),
         ("q", "Stop monitoring gracefully and print the session report"),
         ("Ctrl+C", "Same as q. A second Ctrl+C during shutdown forces the stop."),
     ):

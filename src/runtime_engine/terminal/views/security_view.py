@@ -15,7 +15,11 @@ from runtime_engine.terminal.views.integrity_view import render_integrity
 from runtime_engine.terminal.views.network_view import render_network
 from runtime_engine.terminal.views.persistence_view import render_persistence
 from runtime_engine.terminal.views.ransomware_view import render_ransomware
-from runtime_engine.terminal.views.security_common import STATUS_STYLES, status_text
+from runtime_engine.terminal.views.security_common import (
+    STATUS_DISPLAY,
+    STATUS_STYLES,
+    status_text,
+)
 
 TITLES = {
     "persistence": ("Persistence & privilege", "cron, systemd, shell profiles, sudoers, SUID"),
@@ -109,7 +113,8 @@ def status_line(overview: dict[str, dict[str, Any]]) -> Text:
             line.append("off", style="dim")
             continue
         status = entry.get("status")
-        line.append((status or "pending").upper(), style=STATUS_STYLES.get(status or "", "dim"))
+        label = STATUS_DISPLAY.get(status or "", (status or "pending").upper())
+        line.append(label, style=STATUS_STYLES.get(status or "", "dim"))
         if entry.get("findings"):
             worst = entry.get("worst")
             line.append(f" {entry['findings']}", style=severity_style(worst) if worst else "")

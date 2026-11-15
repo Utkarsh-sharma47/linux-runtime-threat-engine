@@ -29,13 +29,15 @@ from runtime_engine.terminal.views.security_view import any_enabled, status_line
 
 COMMANDS = (
     ("h", "Help"),
-    ("p", "Inspect process"),
-    ("i", "Inspect incident"),
-    ("e", "Inspect events"),
+    ("p", "Process"),
+    ("i", "Incident"),
+    ("e", "Events"),
     ("m", "Metrics"),
-    ("r", "Recent alerts"),
+    ("r", "Alerts"),
     ("s", "Security"),
-    ("q", "Stop monitoring"),
+    ("n", "Network"),
+    ("a", "Atomic"),
+    ("q", "Quit"),
 )
 SEVERITIES = list(reversed(Severity))  # CRITICAL first
 
@@ -62,6 +64,19 @@ def header(snap: DashboardSnapshot) -> RenderableType:
     lines: list[RenderableType] = [line, host, poll]
     if any_enabled(snap.security):
         lines.append(status_line(snap.security))
+    if snap.atomic_sessions:
+        atomic = Text(no_wrap=True, overflow="ellipsis")
+        atomic.append("ATOMIC SESSIONS [a]: ", style="bold")
+        parts = []
+        for item in snap.atomic_sessions[:3]:
+            label = item.get("run_id") or "?"
+            if item.get("synthetic"):
+                label += " [SYNTHETIC]"
+            parts.append(f"{label} ({item.get('status')})")
+        atomic.append(", ".join(parts), style="cyan")
+        if len(snap.atomic_sessions) > 3:
+            atomic.append(f" +{len(snap.atomic_sessions) - 3} more", style="dim")
+        lines.append(atomic)
     return Panel(
         Group(*lines),
         title="LINUX RUNTIME THREAT DETECTION ENGINE (read-only)",
@@ -271,7 +286,11 @@ def render_dashboard(
     if height < 24 or width < 70:
         return compact(snap, height, interactive)
     layout = Layout(name="root")
-    header_size = 6 if any_enabled(snap.security) else 5
+    header_size = 5
+    if any_enabled(snap.security):
+        header_size += 1
+    if snap.atomic_sessions:
+        header_size += 1
     sections: list[Layout] = [Layout(header(snap), name="header", size=header_size)]
     used = header_size + 1
     error = error_banner(snap)

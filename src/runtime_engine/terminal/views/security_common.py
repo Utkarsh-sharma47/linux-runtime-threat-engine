@@ -16,7 +16,9 @@ STATUS_STYLES = {
     "degraded": "bold yellow",
     "baseline-created": "bold cyan",
     "no-baseline": "bold yellow",
+    "not-baselined": "bold yellow",
     "no-model": "bold yellow",
+    "untrained": "bold yellow",
     "disabled": "dim",
     "error": "bold white on dark_red",
     "unavailable": "bold yellow",
@@ -25,11 +27,21 @@ STATUS_MEANING = {
     "ok": "scan complete",
     "degraded": "scan complete, but some locations could not be read (see coverage)",
     "baseline-created": "first scan recorded the baseline; changes are reported from now on",
-    "no-baseline": "no baseline yet; nothing can be compared",
-    "no-model": "no trained model; nothing is scored",
-    "disabled": "disabled in configuration",
+    "no-baseline": "NOT BASELINED: nothing can be compared yet",
+    "not-baselined": "NOT BASELINED: nothing can be compared yet",
+    "no-model": "UNTRAINED: no trained model; nothing is scored",
+    "untrained": "UNTRAINED: no trained model; nothing is scored",
+    "disabled": "DISABLED in configuration",
     "error": "the scan failed; this is NOT a clean result",
-    "unavailable": "required telemetry is not available on this host",
+    "unavailable": "UNAVAILABLE: required telemetry is not available on this host",
+}
+STATUS_DISPLAY = {
+    "no-baseline": "NOT BASELINED",
+    "not-baselined": "NOT BASELINED",
+    "no-model": "UNTRAINED",
+    "untrained": "UNTRAINED",
+    "disabled": "DISABLED",
+    "unavailable": "UNAVAILABLE",
 }
 
 
@@ -38,7 +50,8 @@ def as_dict(finding: Finding | dict[str, Any]) -> dict[str, Any]:
 
 
 def status_text(status: str | None) -> Text:
-    label = (status or "not run").upper()
+    key = status or "not run"
+    label = STATUS_DISPLAY.get(key, key.upper())
     return Text(label, style=STATUS_STYLES.get(status or "", "dim"))
 
 
