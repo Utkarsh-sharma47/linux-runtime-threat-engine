@@ -26,6 +26,17 @@ from runtime_engine.process.ancestry import parent_key
 from runtime_engine.security.findings import SecurityState
 
 
+def _load_lab_status() -> dict[str, Any] | None:
+    """Read the security-lab status file if the demo orchestrator is active."""
+    try:
+        from runtime_engine.lab.status import read_status
+
+        status = read_status()
+    except Exception:
+        return None
+    return status.as_dict() if status is not None else None
+
+
 class Verbosity(IntEnum):
     QUIET = 0
     NORMAL = 1
@@ -200,6 +211,7 @@ class DashboardSnapshot:
     error: str | None
     security: dict[str, dict[str, Any]] = field(default_factory=dict)
     atomic_sessions: list[dict[str, Any]] = field(default_factory=list)
+    lab_status: dict[str, Any] | None = None
 
 
 def peak_rss_kb() -> int | None:
@@ -719,6 +731,7 @@ class DashboardState:
                     key=lambda item: item.get("started_at") or "",
                     reverse=True,
                 ),
+                lab_status=_load_lab_status(),
             )
 
     def process(self, key: str) -> ProcessRecord | None:
