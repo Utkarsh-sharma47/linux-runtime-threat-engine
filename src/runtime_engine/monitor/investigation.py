@@ -94,25 +94,32 @@ class DatabaseSource:
 
 
 class LiveSource:
-    """The running session's state, falling back to SQLite for stored event history."""
+    """Current monitoring session only. Never mixes prior-session SQLite rows into live views."""
 
     def __init__(self, state: DashboardState, database: Database) -> None:
         self.state = state
         self.database = database
-        self.stored = DatabaseSource(database)
+        self.session_id = state.info.session_id
+        self.started_at = state.info.started_at
 
     def identities(self, pid: int) -> list[Event]:
         return [p.event for p in self.state.processes_for_pid(pid)]
 
     def lookup(self, key: str) -> Event | None:
         record = self.state.process(key)
-        return record.event if record else self.stored.lookup(key)
+        return record.event if record else None
 
     def children(self, key: str) -> list[Event]:
         return [p.event for p in self.state.child_processes(key)]
 
     def events(self, key: str) -> list[Event]:
-        return self.database.process_events([key])
+        """Prefer the live buffer; fall back to SQLite rows for this session only."""
+        buffered = self.state.events_for_process(key)
+        if buffered:
+            return buffered
+        return self.database.process_events(
+            [key], since=self.started_at, session_id=self.session_id
+        )
 
     def alerts(self, key: str) -> list[Alert]:
         record = self.state.process(key)
@@ -133,7 +140,7 @@ class LiveSource:
     def first_observed(self, key: str) -> tuple[datetime | None, bool | None]:
         record = self.state.process(key)
         if record is None:
-            return self.stored.first_observed(key)
+            return None, None
         return record.first_observed, record.baseline
 
 
@@ -236,17 +243,29 @@ def incident_details(
     incident_id: str,
     rules: list[Rule],
     active: bool | None = None,
+    *,
+    since: datetime | None = None,
+    session_id: str | None = None,
 ) -> IncidentDetails | None:
     incident = database.incident(incident_id)
     if incident is None:
         return None
     report = generate(database, incident_id)
     observed: dict[str, Event] = {}
-    for event in database.process_events(incident.context_process_keys):
+    for event in database.process_events(
+        incident.context_process_keys, since=since, session_id=session_id
+    ):
         if event.process_key and (
             event.process_key not in observed or event.event_type == EventType.PROCESS_START
         ):
             observed.setdefault(event.process_key, event)
+    # Always include processes tied directly to the incident's own event IDs.
+    known = set(incident.event_ids)
+    for event in database.evidence(incident_id):
+        if since is not None and event.timestamp < since and event.event_id not in known:
+            continue
+        if event.process_key and event.process_key not in observed:
+            observed[event.process_key] = event
     return IncidentDetails(
         incident,
         report,

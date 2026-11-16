@@ -185,7 +185,9 @@ def run_monitor(
         dashboard=interactive,
     )
     state = DashboardState(info)
-    pipeline = Pipeline(database, rules, settings.correlation_window_seconds)
+    pipeline = Pipeline(
+        database, rules, settings.correlation_window_seconds, session_id=info.session_id
+    )
     modules: list[SecurityModule] = []
     if options.security_modules:
         modules, off = build_modules(settings, database, state.security)
@@ -274,7 +276,9 @@ def run_replay(
         queue_capacity=None,
     )
     state = DashboardState(info)
-    pipeline = Pipeline(database, rules, settings.correlation_window_seconds)
+    pipeline = Pipeline(
+        database, rules, settings.correlation_window_seconds, session_id=info.session_id
+    )
     state.set_status("RUNNING")
     database.save_session(state.summary())
     try:
@@ -344,7 +348,7 @@ def show_process(database: Database, console: Console, pid: int, as_json: bool) 
     if len(details) > 1:
         console.print(process_view.render_identity_choices([d.event for d in details]))
     for item in details:
-        console.print(process_view.render_process_details(item))
+        console.print(process_view.render_process_details(item, full=True))
     return 0
 
 

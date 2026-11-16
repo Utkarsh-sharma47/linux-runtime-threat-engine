@@ -823,6 +823,30 @@ class DashboardState:
         with self.lock:
             return list(self.events)
 
+    def events_for_process(self, key: str) -> list[Event]:
+        """Session-scoped events for one process identity (from the live buffer only)."""
+        with self.lock:
+            return [r.event for r in self.events if r.event.process_key == key]
+
+    def suspicious_tree_roots(self) -> list[ProcessRecord]:
+        """Suspicious processes whose parent is not also suspicious (activity roots)."""
+        with self.lock:
+            flagged = {
+                key: p.copy()
+                for key, p in self.processes.items()
+                if p.severity is not None
+            }
+            roots = [
+                p
+                for p in flagged.values()
+                if p.parent is None or p.parent not in flagged
+            ]
+            return sorted(
+                roots,
+                key=lambda p: (p.severity.rank if p.severity else -1, p.matches),
+                reverse=True,
+            )
+
     def acknowledge_notifications(self) -> None:
         with self.lock:
             self.notifications.acknowledge()

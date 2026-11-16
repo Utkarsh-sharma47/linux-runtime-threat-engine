@@ -31,8 +31,10 @@ class Database:
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.executescript("""
             CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY, body TEXT NOT NULL, process_key TEXT);
+                id TEXT PRIMARY KEY, body TEXT NOT NULL, process_key TEXT,
+                session_id TEXT, timestamp TEXT);
             CREATE INDEX IF NOT EXISTS events_process ON events(process_key);
+            CREATE INDEX IF NOT EXISTS events_session ON events(session_id);
             CREATE TABLE IF NOT EXISTS alerts (id TEXT PRIMARY KEY, body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS incidents (id TEXT PRIMARY KEY, body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS incident_events (
@@ -58,6 +60,22 @@ class Database:
                 status TEXT NOT NULL, synthetic INTEGER NOT NULL, body TEXT NOT NULL,
                 evaluation TEXT);
         """)
+        self._migrate_events_session_columns()
+
+    def _migrate_events_session_columns(self) -> None:
+        """Add session scoping columns to existing databases without rewriting history."""
+        with self.lock, self.connection:
+            columns = {
+                row[1]
+                for row in self.connection.execute("PRAGMA table_info(events)").fetchall()
+            }
+            if "session_id" not in columns:
+                self.connection.execute("ALTER TABLE events ADD COLUMN session_id TEXT")
+            if "timestamp" not in columns:
+                self.connection.execute("ALTER TABLE events ADD COLUMN timestamp TEXT")
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS events_session ON events(session_id)"
+            )
 
     def event(self, event_id: str) -> Event | None:
         with self.lock:
@@ -77,14 +95,23 @@ class Database:
         incidents: list[Incident],
         alerts: list[Alert],
         finding: "Finding | None" = None,
+        *,
+        session_id: str | None = None,
     ) -> None:
         """Save the event, affected reports and evidence relationships atomically."""
         with self.lock, self.connection:
             if finding is not None:
                 self._upsert_finding(finding)
             self.connection.execute(
-                "INSERT INTO events VALUES (?, ?, ?)",
-                (event.event_id, event.model_dump_json(), event.process_key),
+                "INSERT INTO events(id, body, process_key, session_id, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    event.event_id,
+                    event.model_dump_json(),
+                    event.process_key,
+                    session_id,
+                    event.timestamp.isoformat(),
+                ),
             )
             for alert in alerts:
                 self.connection.execute(
@@ -126,15 +153,35 @@ class Database:
             (Event.model_validate_json(row[0]) for row in rows), key=lambda e: e.timestamp
         )
 
-    def process_events(self, keys: list[str]) -> list[Event]:
-        """Fetch observed lineage context, with identifiers passed only as parameters."""
+    def process_events(
+        self,
+        keys: list[str],
+        *,
+        since: Any | None = None,
+        session_id: str | None = None,
+    ) -> list[Event]:
+        """Fetch observed lineage context, optionally scoped to a live session.
+
+        When ``session_id`` is set, rows stamped with that session are included.
+        Legacy rows (NULL session_id) are included only when ``since`` is unset or
+        the event timestamp is at/after ``since``. Rows from other sessions are never
+        returned.
+        """
         result: dict[str, Event] = {}
         with self.lock:
             for key in keys:
                 for row in self.connection.execute(
-                    "SELECT body FROM events WHERE process_key=?", (key,)
+                    "SELECT body, session_id FROM events WHERE process_key=?", (key,)
                 ).fetchall():
                     event = Event.model_validate_json(row[0])
+                    row_session = row[1]
+                    if session_id is not None:
+                        if row_session is not None and row_session != session_id:
+                            continue
+                        if row_session is None and since is not None and event.timestamp < since:
+                            continue
+                    elif since is not None and event.timestamp < since:
+                        continue
                     result[event.event_id] = event
         return sorted(result.values(), key=lambda e: e.timestamp)
 

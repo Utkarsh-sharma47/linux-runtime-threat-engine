@@ -40,8 +40,16 @@ class ProcessResult:
 
 
 class Pipeline:
-    def __init__(self, database: Database, rules: list[Rule], window_seconds: float = 120) -> None:
+    def __init__(
+        self,
+        database: Database,
+        rules: list[Rule],
+        window_seconds: float = 120,
+        *,
+        session_id: str | None = None,
+    ) -> None:
         self.database = database
+        self.session_id = session_id
         self.ancestry = AncestryTracker()
         self.detection = DetectionEngine(rules)
         self.correlation = CorrelationEngine(
@@ -85,7 +93,9 @@ class Pipeline:
                 )
             )
         alerts = [self.correlation.alerts[a] for i in affected.values() for a in i.alert_ids]
-        self.database.save(event, list(affected.values()), alerts, finding)
+        self.database.save(
+            event, list(affected.values()), alerts, finding, session_id=self.session_id
+        )
         self.metrics.total_events_processed += 1
         self.metrics.total_alerts_generated += len(detections)
         self.metrics.total_incidents_created = len(self.correlation.incidents)
