@@ -206,7 +206,8 @@ def test_process_and_events_commands(tmp_path, capsys):
     assert "no stored process" in capsys.readouterr().err
     assert main(prefix + ["events", "--limit", "50"]) == 0
     events = capsys.readouterr().out
-    assert "RECENT EVENTS" in events and "INCIDENT EVIDENCE" in events and "OBSERVED" in events
+    assert "RECENT EVENTS" in events and "INCIDENT EVIDENCE" in events
+    assert "OBSERVED" in events
     assert main(prefix + ["events", "--pid", "120", "--type", "network_connection", "--json"]) == 0
     [network] = json.loads(capsys.readouterr().out)
     assert network["rule_ids"] == ["RT006"] and network["incident_ids"] == ["INC-0001"]

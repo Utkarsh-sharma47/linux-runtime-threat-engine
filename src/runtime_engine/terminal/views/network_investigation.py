@@ -1,9 +1,8 @@
 """Dedicated network investigation view for live monitoring.
 
-Shows process identity, endpoints, attribution confidence, related detections /
-incidents, and any Atomic execution session linked by process_key. Ambiguous and
-unattributed connections are called out. Snapshot collection limits are disclosed —
-this is not system-wide continuous network visibility.
+Network-focused: destinations, ports, protocol, connection counts, attribution,
+and related indicators. Distinguishes observed connections, suspicious findings,
+and potential beaconing indicators — never labeled as confirmed attacks.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from rich.console import Group, RenderableType
 from rich.panel import Panel
@@ -41,6 +41,41 @@ def _confidence(attribution: str) -> str:
     if "unattributed" in value or not value:
         return "unattributed"
     return value
+
+
+def _split_endpoint(remote: object) -> tuple[str, str]:
+    text = str(remote or "-")
+    if text in {"-", ""}:
+        return "-", "-"
+    if "://" in text:
+        parsed = urlsplit(text)
+        host = parsed.hostname or parsed.netloc or text
+        if parsed.port:
+            port = str(parsed.port)
+        elif ":" in parsed.path:
+            port = parsed.path.split(":")[-1]
+        else:
+            port = "-"
+        return host, port
+    if text.startswith("[") and "]:" in text:
+        host, _, port = text.rpartition("]:")
+        return host + "]", port or "-"
+    if text.count(":") == 1:
+        host, _, port = text.partition(":")
+        return host or "-", port or "-"
+    return text, "-"
+
+
+def classify_row(row: dict[str, Any]) -> str:
+    """observed | suspicious | beacon_indicator — never 'confirmed attack'."""
+    detections = [str(d).upper() for d in (row.get("detections") or [])]
+    findings = [str(f).upper() for f in (row.get("finding_rules") or [])]
+    combined = detections + findings
+    if any("BEACON" in d or d.startswith("NM") for d in combined) or row.get("beacon"):
+        return "beacon_indicator"
+    if combined or row.get("incidents"):
+        return "suspicious"
+    return "observed"
 
 
 def build_rows(
@@ -85,12 +120,14 @@ def build_rows(
                 "last_seen": event.timestamp,
                 "synthetic": bool(meta.get("synthetic")),
                 "event_ids": [event.event_id],
+                "connection_count": 1,
             }
             by_flow[key] = row
         else:
             row["first_seen"] = min(row["first_seen"], event.timestamp)
             row["last_seen"] = max(row["last_seen"], event.timestamp)
             row["event_ids"].append(event.event_id)
+            row["connection_count"] = len(row["event_ids"])
             row["synthetic"] = row["synthetic"] or bool(meta.get("synthetic"))
 
     rows: list[dict[str, Any]] = list(by_flow.values())
@@ -125,6 +162,7 @@ def build_rows(
                 "synthetic": False,
                 "event_ids": [],
                 "snapshot_only": True,
+                "connection_count": 1,
             }
         )
 
@@ -150,18 +188,40 @@ def build_rows(
             or (row.get("pid") is not None and f.get("pid") == row.get("pid"))
         ]
         atomic = session_for_process_key(atomic_sessions, process_key)
+        destination, port = _split_endpoint(row.get("remote"))
+        row["destination"] = destination
+        row["port"] = port
         row["confidence"] = _confidence(str(row.get("attribution") or ""))
         row["detections"] = sorted(
             {a.rule_id for a in related_alerts}
             | {f.get("rule_id") for f in related_findings if f.get("rule_id")}
         )
+        row["finding_rules"] = sorted(
+            {f.get("rule_id") for f in related_findings if f.get("rule_id")}
+        )
+        row["finding_titles"] = [
+            clean(f.get("title") or f.get("rule_id") or "finding", 48) for f in related_findings[:5]
+        ]
+        row["beacon"] = any(
+            "beacon" in str(f.get("title") or "").lower()
+            or "beacon" in str(f.get("rule_id") or "").lower()
+            for f in related_findings
+        )
         row["incidents"] = sorted({i.incident_id for i in related_incidents})
         row["atomic_run_id"] = atomic["run_id"] if atomic else None
         row["atomic_synthetic"] = bool(atomic and atomic.get("synthetic"))
+        row["category"] = classify_row(row)
         if process_key and process_key in processes:
             proc = processes[process_key]
             row["executable"] = proc.event.executable_path or row.get("executable")
             row["process_name"] = proc.event.process_name or row.get("process_name")
+    order = {"beacon_indicator": 0, "suspicious": 1, "observed": 2}
+
+    def _sort_key(row: dict[str, Any]) -> tuple[int, str]:
+        category = str(row.get("category") or "observed")
+        return order.get(category, 9), str(row.get("destination") or "")
+
+    rows.sort(key=_sort_key)
     return rows
 
 
@@ -170,6 +230,8 @@ def render_network_investigation(
     rows: list[dict[str, Any]],
     *,
     atomic_sessions: list[dict[str, Any]] | None = None,
+    interface_summary: str | None = None,
+    limit: int = 40,
 ) -> RenderableType:
     summary = report.summary if report else {}
     header = Table.grid(padding=(0, 2))
@@ -178,12 +240,13 @@ def render_network_investigation(
     header.add_row(
         "SCOPE",
         Text(
-            "Snapshot polling of /proc/net (+ synthetic NETWORK_CONNECTION events). "
-            "Not system-wide continuous capture; connections that open and close "
-            "between scans are missed.",
+            "Socket snapshots (/proc/net). Not system-wide continuous capture; "
+            "short-lived flows between scans may be missed.",
             style="yellow",
         ),
     )
+    if interface_summary:
+        header.add_row("INTERFACES", interface_summary)
     header.add_row(
         "SNAPSHOT",
         f"{summary.get('sockets', 0)} sockets, {summary.get('connected', 0)} connected "
@@ -193,83 +256,120 @@ def render_network_investigation(
     )
     active = [r for r in atomic_sessions or [] if r.get("status") not in ("COMPLETED",)]
     header.add_row(
-        "ATOMIC SESSIONS",
-        ", ".join(f"{s['run_id']}{' [SYNTHETIC]' if s.get('synthetic') else ''}" for s in active)
+        "ATOMIC",
+        ", ".join(
+            f"{s['run_id']}{' [SYNTHETIC]' if s.get('synthetic') else ''}" for s in active
+        )
         or "none active",
+    )
+    counts = {
+        "observed": sum(1 for r in rows if r.get("category") == "observed"),
+        "suspicious": sum(1 for r in rows if r.get("category") == "suspicious"),
+        "beacon_indicator": sum(1 for r in rows if r.get("category") == "beacon_indicator"),
+    }
+    header.add_row(
+        "CATEGORIES",
+        f"observed={counts['observed']}  suspicious={counts['suspicious']}  "
+        f"beacon indicators={counts['beacon_indicator']} (indicators only, not confirmed attacks)",
     )
 
     table = Table(
-        title="NETWORK INVESTIGATION",
+        title="NETWORK ACTIVITY (this session)",
         title_justify="left",
         expand=True,
         show_lines=False,
     )
     for column in (
-        "PID",
-        "PROCESS",
-        "EXECUTABLE",
+        "#",
+        "DESTINATION",
+        "PORT",
         "PROTO",
-        "LOCAL",
-        "REMOTE",
-        "STATE",
-        "FIRST",
-        "LAST",
-        "ATTRIBUTION",
-        "DETECTIONS",
-        "INCIDENTS",
-        "ATOMIC SESSION",
+        "COUNT",
+        "PROCESS",
+        "PID",
+        "CONFIDENCE",
+        "CATEGORY",
+        "LAST SEEN",
+        "FINDINGS",
     ):
         table.add_column(column, no_wrap=True, overflow="ellipsis")
 
-    ambiguous = 0
-    unattributed = 0
-    for row in rows:
-        confidence = row.get("confidence") or "unattributed"
-        if confidence == "ambiguous":
-            ambiguous += 1
-        elif confidence == "unattributed":
-            unattributed += 1
+    shown = rows[:limit]
+    for index, row in enumerate(shown, 1):
+        category = row.get("category") or "observed"
         style = (
             "yellow"
-            if confidence == "ambiguous"
-            else "dim"
-            if confidence == "unattributed"
-            else ("cyan" if row.get("synthetic") or row.get("atomic_synthetic") else None)
+            if category == "suspicious"
+            else "bold yellow"
+            if category == "beacon_indicator"
+            else ("cyan" if row.get("synthetic") else None)
         )
-        atomic_label = row.get("atomic_run_id") or "-"
-        if row.get("atomic_synthetic") and atomic_label != "-":
-            atomic_label = f"{atomic_label} [SYNTHETIC]"
         table.add_row(
-            str(row.get("pid") or "-"),
-            clean(row.get("process_name") or "-", 16),
-            clean(row.get("executable") or "-", 24),
+            str(index),
+            clean(str(row.get("destination") or "-"), 28),
+            clean(str(row.get("port") or "-"), 6),
             str(row.get("protocol") or "-"),
-            clean(str(row.get("local") or "-"), 22),
-            clean(str(row.get("remote") or "-"), 26),
-            str(row.get("state") or "-"),
-            _ts(row.get("first_seen")),
+            str(row.get("connection_count") or 1),
+            clean(row.get("process_name") or "-", 16),
+            str(row.get("pid") or "-"),
+            clean(str(row.get("confidence") or "-"), 12),
+            category.replace("_", " "),
             _ts(row.get("last_seen")),
-            clean(f"{confidence} ({row.get('attribution') or '-'})", 28),
             clean(", ".join(row.get("detections") or []) or "-", 20),
-            clean(", ".join(row.get("incidents") or []) or "-", 16),
-            clean(str(atomic_label), 28),
             style=style,
         )
+    if len(rows) > limit:
+        table.caption = f"{len(rows) - limit} more not shown; select a row number for details"
 
-    callouts = Text()
-    callouts.append(
-        f"{ambiguous} ambiguous, {unattributed} unattributed connection(s). ",
-        style="bold yellow" if ambiguous or unattributed else "dim",
-    )
-    callouts.append(
-        "Ambiguous = multiple PIDs share the socket inode; unattributed = no readable "
-        "owner (often other-user processes without root). SYNTHETIC rows are acceptance "
-        "evidence, not real host activity.",
+    note = Text(
+        "Categories are review indicators only. Beacon indicators are behavioural signals, "
+        "not confirmed C2. Press a row # for details, or Enter to return.",
         style="dim",
     )
     return Panel(
-        Group(header, table, callouts),
+        Group(header, table, note),
         title="NETWORK INVESTIGATION [n]",
+        title_align="left",
+        border_style="cyan",
+    )
+
+
+def render_connection_detail(row: dict[str, Any]) -> RenderableType:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold", no_wrap=True)
+    grid.add_column(overflow="fold")
+    category = str(row.get("category") or "observed").replace("_", " ")
+    for label, value in (
+        ("DESTINATION", clean(str(row.get("destination") or "-"))),
+        ("PORT", clean(str(row.get("port") or "-"))),
+        ("PROTOCOL", clean(str(row.get("protocol") or "-"))),
+        ("LOCAL", clean(str(row.get("local") or "-"))),
+        ("STATE", clean(str(row.get("state") or "-"))),
+        ("CONNECTIONS", str(row.get("connection_count") or 1)),
+        ("PROCESS", f"{clean(row.get('process_name') or '-')} (PID {row.get('pid') or '-'})"),
+        ("EXECUTABLE", clean(str(row.get("executable") or "-"), 60)),
+        ("ATTRIBUTION", clean(f"{row.get('confidence')} ({row.get('attribution') or '-'})")),
+        ("CATEGORY", category),
+        ("FIRST SEEN", _ts(row.get("first_seen"))),
+        ("LAST SEEN", _ts(row.get("last_seen"))),
+        ("DETECTIONS", ", ".join(row.get("detections") or []) or "none"),
+        ("INCIDENTS", ", ".join(row.get("incidents") or []) or "none"),
+        ("ATOMIC", row.get("atomic_run_id") or "none"),
+    ):
+        grid.add_row(label, value)
+    findings = row.get("finding_titles") or []
+    finding_block: RenderableType = (
+        Text("\n".join(f"- {f}" for f in findings))
+        if findings
+        else Text("No network-module findings for this destination/process.", style="dim")
+    )
+    caveat = Text(
+        "Findings and detections are indicators for review, not confirmed attacks.",
+        style="italic dim",
+    )
+    return Panel(
+        Group(grid, Text("\nRELATED FINDINGS", style="bold underline"), finding_block, caveat),
+        title="CONNECTION DETAILS",
         title_align="left",
         border_style="cyan",
     )
@@ -283,4 +383,9 @@ def _ts(value: datetime | str | None) -> str:
     return timestamp(value.isoformat())
 
 
-__all__ = ["build_rows", "render_network_investigation"]
+__all__ = [
+    "build_rows",
+    "classify_row",
+    "render_connection_detail",
+    "render_network_investigation",
+]

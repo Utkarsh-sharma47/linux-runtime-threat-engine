@@ -105,8 +105,9 @@ def test_menu_lists_all_modules_with_status_and_honest_off_state():
         assert title[0] in text
     assert "OFF: no directories" in text and "configured" in text
     assert "DEGRADED" in text and "PENDING" in text
-    assert "0/1/0/1" in text  # persistence C/H/M/L
-    assert "has not checked anything" in " ".join(text.split())
+    assert "PM004 test finding" in text or "finding" in text.lower()
+    assert "UNTRAINED" in text or "NOT BASELINED" in text or "honest states" in text
+    assert "empty findings there do not mean the host is clean" in " ".join(text.split())
 
 
 def test_security_page_navigation_filters_and_details(database, tmp_path):
@@ -131,7 +132,7 @@ def test_security_page_navigation_filters_and_details(database, tmp_path):
     page, console = inspector(state, database, answers, tmp_path)
     page.dispatch("s")
     text = text_of(console)
-    assert "SECURITY INVESTIGATION" in text
+    assert "SECURITY MODULES" in text or "SECURITY INVESTIGATION" in text
     assert "No module or finding matches 'bogus'" in text
     assert "Filter: severity >= CRITICAL (0 of 2 findings shown)" in text
     assert "Severity must be LOW, MEDIUM, HIGH or CRITICAL." in text

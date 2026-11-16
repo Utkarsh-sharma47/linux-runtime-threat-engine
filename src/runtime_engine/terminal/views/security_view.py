@@ -8,7 +8,7 @@ from rich.text import Text
 
 from runtime_engine.events.schema import Severity
 from runtime_engine.security.findings import MODULES, Finding, ScanReport
-from runtime_engine.terminal.formatting import clean, severity_style, timestamp
+from runtime_engine.terminal.formatting import clean, severity_style, severity_text
 from runtime_engine.terminal.views.anomaly_view import render_anomaly
 from runtime_engine.terminal.views.exposure_view import render_exposure
 from runtime_engine.terminal.views.integrity_view import render_integrity
@@ -68,33 +68,56 @@ def state_text(entry: dict[str, Any]) -> Text:
     return Text(f"OFF: {clean(enabled, 60)}", style="dim")
 
 
+def _latest_finding_label(entry: dict[str, Any]) -> tuple[str, Text]:
+    """Return (title, severity text) for the module's most severe recent finding."""
+    latest = entry.get("latest_finding")
+    if isinstance(latest, dict):
+        title = clean(latest.get("title") or latest.get("rule_id") or "finding", 40)
+        severity = latest.get("severity")
+        try:
+            level = Severity(severity) if isinstance(severity, str) else severity
+        except ValueError:
+            level = None
+        return title, severity_text(level) if level else Text("-", style="dim")
+    count = entry.get("findings") or 0
+    if count:
+        return f"{count} finding(s)", counts_text(entry.get("by_severity", {}))
+    status = entry.get("status")
+    if entry.get("enabled") != "enabled":
+        return "not running", Text("-", style="dim")
+    if status in ("untrained", "no-model"):
+        return "model untrained", Text("UNTRAINED", style="bold yellow")
+    if status in ("no-baseline", "not-baselined"):
+        return "not baselined", Text("NOT BASELINED", style="bold yellow")
+    if status == "degraded":
+        return "scan degraded", Text("DEGRADED", style="bold yellow")
+    if status is None:
+        return "awaiting first scan", Text("-", style="dim")
+    return "no findings yet", Text("OK", style="green")
+
+
 def render_security_menu(overview: dict[str, dict[str, Any]]) -> RenderableType:
-    table = Table(title="SECURITY INVESTIGATION", title_justify="left", expand=True)
+    table = Table(title="SECURITY MODULES", title_justify="left", expand=True)
     table.add_column("#", justify="right", no_wrap=True)
     table.add_column("MODULE", no_wrap=True)
-    table.add_column("WHAT IT CHECKS", overflow="ellipsis", no_wrap=True, ratio=2)
-    table.add_column("STATE", overflow="fold", ratio=1)
-    table.add_column("LAST SCAN", no_wrap=True)
-    table.add_column("SCANS", justify="right", no_wrap=True)
-    table.add_column("FINDINGS C/H/M/L", no_wrap=True)
-    table.add_column("PROMOTED", justify="right", no_wrap=True)
+    table.add_column("STATUS", overflow="fold", ratio=1)
+    table.add_column("LATEST / NOTES", overflow="ellipsis", no_wrap=True, ratio=2)
+    table.add_column("SEVERITY", no_wrap=True)
     for index, module in enumerate(MODULES, 1):
         entry = overview.get(module, {})
-        title, description = TITLES[module]
+        title, _ = TITLES[module]
+        latest, severity = _latest_finding_label(entry)
         table.add_row(
             str(index),
             title,
-            description,
             state_text(entry),
-            timestamp(entry["last_scan"]) if entry.get("last_scan") else "never",
-            str(entry.get("scans", 0)),
-            counts_text(entry.get("by_severity", {})),
-            str(entry.get("promoted", 0)),
+            latest,
+            severity,
         )
     note = Text(
-        "Findings are deduplicated by stable ID; PROMOTED findings also entered incident "
-        "correlation (press i). A module that is OFF or has not scanned yet has not checked "
-        "anything: no findings there does not mean the host is clean.",
+        "Open a module for findings and coverage. OFF / UNTRAINED / NOT BASELINED / DEGRADED "
+        "are honest states — empty findings there do not mean the host is clean. "
+        "Enter / b returns to the dashboard.",
         style="dim",
     )
     return Group(table, note)

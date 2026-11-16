@@ -48,34 +48,31 @@ def header(snap: DashboardSnapshot) -> RenderableType:
     line = Text(no_wrap=True, overflow="ellipsis")
     line.append("STATUS: ")
     line.append(snap.status, style=STATUS_STYLES.get(snap.status, "bold"))
-    line.append(f"   MODE: {info.mode}   DURATION: {duration(elapsed)}")
-    line.append(f"   STARTED: {clock(info.started_at)}")
-    line.append(f"   VERBOSITY: {info.verbosity.name.lower()}")
-    host = Text(no_wrap=True, overflow="ellipsis")
-    host.append(f"HOST: {clean(info.hostname, 32)}   ENGINE PID: {info.engine_pid}")
-    host.append(f"   SESSION: {info.session_id}")
-    poll = Text(no_wrap=True, overflow="ellipsis", style="dim")
-    poll.append(f"Telemetry: {info.telemetry}")
+    line.append(f"   SESSION: {info.session_id}")
+    line.append(f"   DURATION: {duration(elapsed)}")
+    line.append(f"   HOST: {clean(info.hostname, 24)}")
+    meta = Text(no_wrap=True, overflow="ellipsis", style="dim")
+    meta.append(f"Mode {info.mode}   Started {clock(info.started_at)}")
     if counters.last_poll_at is not None and counters.last_poll_seconds is not None:
-        poll.append(
-            f"   Last poll #{counters.polls}: {clock(counters.last_poll_at)}"
+        meta.append(
+            f"   Poll #{counters.polls} {clock(counters.last_poll_at)}"
             f" ({counters.last_poll_seconds * 1000:.0f} ms)"
         )
-    lines: list[RenderableType] = [line, host, poll]
+    lines: list[RenderableType] = [line, meta]
     if any_enabled(snap.security):
         lines.append(status_line(snap.security))
     if snap.atomic_sessions:
         atomic = Text(no_wrap=True, overflow="ellipsis")
         atomic.append("ATOMIC SESSIONS [a]: ", style="bold")
         parts = []
-        for item in snap.atomic_sessions[:3]:
+        for item in snap.atomic_sessions[:2]:
             label = item.get("run_id") or "?"
             if item.get("synthetic"):
                 label += " [SYNTHETIC]"
             parts.append(f"{label} ({item.get('status')})")
         atomic.append(", ".join(parts), style="cyan")
-        if len(snap.atomic_sessions) > 3:
-            atomic.append(f" +{len(snap.atomic_sessions) - 3} more", style="dim")
+        if len(snap.atomic_sessions) > 2:
+            atomic.append(f" +{len(snap.atomic_sessions) - 2} more", style="dim")
         lines.append(atomic)
     if snap.lab_status:
         lines.append(lab_status_line(snap.lab_status, snap.counters, len(snap.incidents)))
@@ -133,32 +130,25 @@ def overview(snap: DashboardSnapshot, inline_severity: bool = False) -> Renderab
     grid = Table.grid(padding=(0, 1))
     grid.add_column(style="bold", no_wrap=True)
     grid.add_column(justify="right", no_wrap=True, overflow="ellipsis")
-    queue = f"{number(c.queue_depth)}/{number(snap.info.queue_capacity)} (peak {c.queue_peak})"
     rows = [
-        ("Events Observed", number(c.observed)),
         ("Events Processed", number(c.processed)),
-        ("Event Queue", queue if snap.info.queue_capacity else "N/A"),
-        ("Suspicious Detections", number(c.rule_matches)),
-        ("Unique Alerts", number(snap.unique_alerts)),
+        ("Detections", number(c.rule_matches)),
+        ("Alerts", number(snap.unique_alerts)),
         ("Active Incidents", f"{len(snap.active_incident_ids)} of {len(snap.incidents)}"),
-        ("Suppressed Duplicates", number(c.duplicate_matches)),
-        ("Events Dropped", number(c.dropped)),
-        (
-            "Telemetry Gaps/Poll",
-            f"{number(c.last_poll_missing)} fields, {c.last_poll_failures} skipped",
-        ),
     ]
+    if c.dropped:
+        rows.append(("Events Dropped", number(c.dropped)))
     if inline_severity:
         rows.append(
             (
-                "Matches C/H/M/L",
+                "Severity C/H/M/L",
                 "/".join(str(snap.match_severity.get(s.value, 0)) for s in SEVERITIES),
             )
         )
     for label, value in rows:
-        style = "bold red" if label == "Events Dropped" and c.dropped else ""
+        style = "bold red" if label == "Events Dropped" else ""
         grid.add_row(label, Text(value, style=style))
-    return Panel(grid, title="SYSTEM OVERVIEW", title_align="left", border_style="cyan")
+    return Panel(grid, title="SESSION STATUS", title_align="left", border_style="cyan")
 
 
 def severity_panel(snap: DashboardSnapshot) -> RenderableType:
@@ -209,35 +199,30 @@ def incidents_panel(snap: DashboardSnapshot, rows: int) -> RenderableType:
 
 def processes_panel(snap: DashboardSnapshot, height: int) -> RenderableType:
     rows = max(0, height - 3)
-    if not snap.processes:
-        body: RenderableType = Text("No processes observed yet.", style="dim")
+    suspicious = [p for p in snap.processes if p.severity is not None]
+    if not suspicious:
+        body: RenderableType = Text(
+            "No suspicious processes in this session.\nPress [3] to inspect a PID.",
+            style="dim",
+        )
     else:
         table = Table(box=None, padding=(0, 1), show_edge=False, expand=True)
         table.add_column("PID", justify="right", no_wrap=True, min_width=7)
-        table.add_column("PPID", justify="right", no_wrap=True, min_width=7)
         table.add_column("PROCESS", overflow="ellipsis", no_wrap=True, ratio=1)
-        table.add_column("UID", no_wrap=True, min_width=5)
-        table.add_column("STATUS", no_wrap=True, min_width=19)
-        for record in snap.processes[:rows]:
+        table.add_column("SEVERITY", no_wrap=True, min_width=10)
+        table.add_column("INCIDENTS", no_wrap=True, overflow="ellipsis")
+        for record in suspicious[:rows]:
             event = record.event
-            if record.severity is not None:
-                status = Text(f"SUSPICIOUS ({record.severity.value})")
-                status.stylize(severity_style(record.severity))
-            elif record.baseline:
-                status = Text("NORMAL (baseline)", style="green dim")
-            else:
-                status = Text("NORMAL", style="green")
             table.add_row(
                 clean(event.pid),
-                clean(event.ppid),
                 clean(event.process_name, 24),
-                clean(event.uid),
-                status,
+                severity_text(record.severity),
+                ", ".join(record.incident_ids) or "-",
             )
         body = table
     return Panel(
         body,
-        title="RECENT PROCESSES (NORMAL = no rule matched)",
+        title="SUSPICIOUS PROCESSES (this session)",
         title_align="left",
         border_style="green",
         height=height,
@@ -330,7 +315,7 @@ def render_dashboard(
     if height < 24 or width < 70:
         return compact(snap, height, interactive)
     layout = Layout(name="root")
-    header_size = 5
+    header_size = 4
     if any_enabled(snap.security):
         header_size += 1
     if snap.atomic_sessions:
@@ -343,27 +328,28 @@ def render_dashboard(
     if error is not None:
         sections.append(Layout(error, name="error", size=3))
         used += 3
-    top = Layout(name="top", size=13)
+    top_size = 10
+    top = Layout(name="top", size=top_size)
     if width >= 110:
         top.split_row(
-            Layout(overview(snap), name="overview", ratio=3),
+            Layout(overview(snap), name="overview", ratio=2),
             Layout(severity_panel(snap), name="severity", ratio=2),
-            Layout(incidents_panel(snap, 8), name="incidents", ratio=4),
+            Layout(incidents_panel(snap, 5), name="incidents", ratio=3),
         )
     else:
         top.split_row(
             Layout(overview(snap, inline_severity=True), name="overview", ratio=1),
-            Layout(incidents_panel(snap, 8), name="incidents", ratio=1),
+            Layout(incidents_panel(snap, 5), name="incidents", ratio=1),
         )
     sections.append(top)
-    used += 13
-    banner_lines = min(6, 3 + len(snap.notifications))
-    banner = alert_banner(snap, banner_lines) if height - used > 16 else None
+    used += top_size
+    banner_lines = min(5, 3 + min(2, len(snap.notifications)))
+    banner = alert_banner(snap, banner_lines) if height - used > 14 else None
     if banner is not None:
         sections.append(Layout(banner, name="alerts", size=banner_lines))
         used += banner_lines
     debug = snap.info.verbosity >= Verbosity.DEBUG and height - used > 18
-    remaining = height - used - (8 if debug else 0)
+    remaining = height - used - (6 if debug else 0)
     body = Layout(name="body")
     if width >= 140:
         body.split_row(
@@ -371,7 +357,7 @@ def render_dashboard(
             Layout(log_panel(snap.logs, remaining, snap.info.verbosity), name="logs", ratio=3),
         )
     else:
-        process_height = min(10, max(5, remaining // 3))
+        process_height = min(8, max(4, remaining // 3))
         body.split_column(
             Layout(processes_panel(snap, process_height), name="processes", size=process_height),
             Layout(
@@ -381,7 +367,7 @@ def render_dashboard(
         )
     sections.append(body)
     if debug:
-        sections.append(Layout(diagnostics_panel(snap, 8), name="diagnostics", size=8))
+        sections.append(Layout(diagnostics_panel(snap, 6), name="diagnostics", size=6))
     sections.append(Layout(footer(snap, interactive), name="footer", size=1))
     layout.split_column(*sections)
     return layout
@@ -393,9 +379,11 @@ def compact(snap: DashboardSnapshot, height: int, interactive: bool) -> Renderab
     status = Text(no_wrap=True, overflow="ellipsis")
     status.append(f"{snap.status} ", style=STATUS_STYLES.get(snap.status, "bold"))
     status.append(
-        f"obs={c.observed} proc={c.processed} matches={c.rule_matches} "
-        f"alerts={snap.unique_alerts} incidents={len(snap.incidents)} dropped={c.dropped}"
+        f"session={snap.info.session_id} proc={c.processed} matches={c.rule_matches} "
+        f"alerts={snap.unique_alerts} incidents={len(snap.incidents)}"
     )
+    if c.dropped:
+        status.append(f" dropped={c.dropped}", style="bold red")
     parts: list[RenderableType] = [status]
     if any_enabled(snap.security):
         parts.append(status_line(snap.security))
@@ -494,22 +482,14 @@ def render_process_tree(
         if show_suspicious_only and severity is None:
             return  # Skip processes without a rule match
 
-        # Create rich label
-        label_text = f"PID {pid} {pname}{suffix}"
+        label = Text(f"PID {pid} {pname}{suffix}")
         if severity is not None:
-            label_text += f" {severity.value}"
+            label.append(f" {severity.value}", style=severity_style(severity))
+            label.stylize("bold")
+        node = Tree(label, guide_style="dim")
 
-        node = Tree(label_text, guide_style="dim")
-
-        # Add children
         for child_key in node_data["children"]:
             add_node(node, child_key, depth + 1)
-
-        # Add parent info if available
-        if node_data["parent"]:
-            parent_record = state.processes.get(node_data["parent"])
-            if parent_record is not None and parent_record.event is not None:
-                node.add(f"  (parent PID {parent_record.event.pid})")
 
         parent_tree.add(node)
 
@@ -535,10 +515,11 @@ def render_process_tree(
     elif root_lifecycle == ProcessLifecycle.GONE:
         suffix = " [GONE]"
 
-    root_label = f"PID {pid} {pname}{suffix}"
+    root_label = Text(f"PID {pid} {pname}{suffix}")
     root_severity = severity_of(root_key)
     if root_severity is not None:
-        root_label += f" {root_severity.value}"
+        root_label.append(f" {root_severity.value}", style=severity_style(root_severity))
+        root_label.stylize("bold")
 
     root_tree = Tree(root_label, guide_style="bold")
 

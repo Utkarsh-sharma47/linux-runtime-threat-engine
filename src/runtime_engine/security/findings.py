@@ -231,6 +231,7 @@ class SecurityState:
             for module in MODULES:
                 report = self.reports.get(module)
                 mine = [f for f in latest.values() if f.module == module]
+                top = max(mine, key=lambda f: (f.severity.rank, f.detected_at), default=None)
                 result[module] = {
                     "enabled": self.enabled.get(module, "not configured"),
                     "status": report.status if report else None,
@@ -240,5 +241,15 @@ class SecurityState:
                     "by_severity": dict(Counter(f.severity.value for f in mine)),
                     "worst": max((f.severity for f in mine), key=lambda s: s.rank, default=None),
                     "scans": self.scans.get(module, 0),
+                    "latest_finding": (
+                        {
+                            "finding_id": top.finding_id,
+                            "rule_id": top.rule_id,
+                            "title": top.title,
+                            "severity": top.severity.value,
+                        }
+                        if top is not None
+                        else None
+                    ),
                 }
             return result

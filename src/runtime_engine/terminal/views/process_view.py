@@ -11,7 +11,6 @@ from runtime_engine.monitor.investigation import LineageNode, ProcessDetails
 from runtime_engine.monitor.state import ProcessRecord
 from runtime_engine.terminal.formatting import (
     clean,
-    command_line,
     severity_text,
     timestamp,
     user,
@@ -23,16 +22,25 @@ ACTIONS = (
     ("3", "View complete ancestry"),
     ("4", "View associated alerts"),
     ("5", "View associated incidents"),
-    ("6", "Back to dashboard"),
+    ("6", "View related events"),
+    ("7", "Back to dashboard"),
 )
+
+
+def _reason(record: ProcessRecord) -> str:
+    if record.incident_ids:
+        return f"incident {', '.join(record.incident_ids[:2])}"
+    if record.alert_ids:
+        return f"{len(record.alert_ids)} alert(s)"
+    return "rule match"
 
 
 def render_process_list(records: list[ProcessRecord], title: str) -> RenderableType:
     if not records:
         return Panel(
             Text(
-                "No process has a rule match in this session.\n"
-                "You can still enter the PID of any observed process.",
+                "No suspicious processes in this session.\n"
+                "Enter a PID to inspect any observed process, or press Enter to return.",
                 style="dim",
             ),
             title=title,
@@ -40,18 +48,16 @@ def render_process_list(records: list[ProcessRecord], title: str) -> RenderableT
         )
     table = Table(title=title, title_justify="left", expand=False)
     table.add_column("PID", justify="right")
-    table.add_column("PPID", justify="right")
     table.add_column("PROCESS")
     table.add_column("SEVERITY")
-    table.add_column("ALERTS", justify="right")
+    table.add_column("REASON", overflow="fold")
     table.add_column("INCIDENTS")
     for record in records:
         table.add_row(
             clean(record.event.pid),
-            clean(record.event.ppid),
             clean(record.event.process_name, 24),
             severity_text(record.severity),
-            str(len(record.alert_ids)),
+            clean(_reason(record), 40),
             ", ".join(record.incident_ids) or "-",
         )
     return table
@@ -121,50 +127,35 @@ def ancestry_tree(details: ProcessDetails, *, verbose: bool = False) -> Tree:
     return tree
 
 
-def render_process_details(details: ProcessDetails) -> RenderableType:
+def render_process_details(details: ProcessDetails, *, full: bool = False) -> RenderableType:
+    """Compact summary by default. ``full=True`` includes ancestry/events (CLI)."""
     event = details.event
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold", no_wrap=True)
     grid.add_column(overflow="fold")
-    cmd = (
-        command_line(event.command_line)
-        if event.command_line
-        else "not collected (enable with monitor --include-cmdline, if authorized)"
-    )
     live = details.liveness
     status = Text(live.label, style="bold green" if live.running else "bold yellow")
     status.append(f" - {live.detail}", style="")
-    started = (
-        f"{timestamp(details.started_at)} (derived from boot time + start ticks)"
-        if details.started_at
-        else "N/A (only kernel start ticks are known)"
-    )
-    first = timestamp(details.first_observed)
-    if details.baseline:
-        first += "  [baseline snapshot: already running when monitoring started]"
     detection = (
-        severity_text(details.severity).append("  SUSPICIOUS - rule match(es) below")
+        severity_text(details.severity).append("  SUSPICIOUS")
         if details.severity
         else Text("NO RULE MATCHED (not proof of benign behaviour)", style="green")
     )
+    top_reason = details.alerts[0].reason if details.alerts else "-"
     for label, value in (
         ("PID", clean(event.pid)),
-        ("PPID", clean(event.ppid)),
         ("PROCESS NAME", clean(event.process_name)),
-        ("PARENT NAME", clean(event.parent_process_name)),
-        ("EXECUTABLE", clean(event.executable_path, missing="unknown (unreadable or absent)")),
-        ("COMMAND LINE", cmd),
+        ("EXECUTABLE", clean(event.executable_path, missing="unknown")),
         ("USER ID", user(event.uid, event.source == "proc")),
-        ("START TIME", started),
-        ("START TOKEN", f"{clean(event.process_start_time)} (kernel start ticks)"),
-        ("FIRST OBSERVED", first),
-        ("SOURCE", clean(event.source)),
-        ("IDENTITY", clean(details.key)),
+        ("FIRST OBSERVED", timestamp(details.first_observed)),
+        ("LIVE STATUS", status),
+        ("DETECTION", detection),
+        ("REASON", clean(top_reason, 80)),
+        ("ALERTS", str(len(details.alerts))),
+        ("INCIDENTS", ", ".join(i.incident_id for i in details.incidents) or "-"),
     ):
         grid.add_row(label, value)
-    grid.add_row("LIVE STATUS", status)
-    grid.add_row("DETECTION STATUS", detection)
-    sections: list[RenderableType] = [grid, Text("")]
+    sections: list[RenderableType] = [grid]
     if not details.liveness.running:
         sections.append(
             Text(
@@ -173,40 +164,56 @@ def render_process_details(details: ProcessDetails) -> RenderableType:
                 style="yellow",
             )
         )
-    sections.append(Text("TRIGGERED RULES", style="bold underline"))
     if details.alerts:
-        for alert in details.alerts:
+        sections.append(Text("\nTOP RULE MATCHES", style="bold underline"))
+        for alert in details.alerts[: 3 if not full else None]:
             line = Text("- ")
             line.append(f"{alert.rule_id}: {clean(alert.rule_name)} ")
             line.append_text(severity_text(alert.severity))
-            line.append(f"  occurrences={len(alert.event_ids)}")
             line.append(f"\n    matched: {clean(alert.reason)}", style="dim")
             sections.append(line)
+        if not full and len(details.alerts) > 3:
+            sections.append(Text(f"  +{len(details.alerts) - 3} more (action 4)", style="dim"))
+    if full:
+        sections.append(
+            Text("\nRELATED EVENTS (stored telemetry for this identity)", style="bold underline")
+        )
+        sections.append(
+            event_table(details.events) if details.events else Text("- none", style="dim")
+        )
+        sections.append(
+            Text("\nPROCESS ANCESTRY (explicit parent identities only)", style="bold underline")
+        )
+        sections.append(ancestry_tree(details))
+        sections.append(Text("\nRELATED INCIDENTS", style="bold underline"))
+        if details.incidents:
+            for incident in details.incidents:
+                role = (
+                    "rule match on this process"
+                    if details.key in incident.process_keys
+                    else "context: ancestor of a matched process"
+                )
+                line = Text(f"- {incident.incident_id} ")
+                line.append_text(severity_text(incident.severity))
+                line.append(f"  {role}", style="dim")
+                sections.append(line)
+        else:
+            sections.append(Text("- none", style="dim"))
     else:
-        sections.append(Text("- none", style="dim"))
-    sections.append(
-        Text("\nRELATED EVENTS (stored telemetry for this identity)", style="bold underline")
-    )
-    sections.append(event_table(details.events) if details.events else Text("- none", style="dim"))
-    sections.append(
-        Text("\nPROCESS ANCESTRY (explicit parent identities only)", style="bold underline")
-    )
-    sections.append(ancestry_tree(details))
-    sections.append(Text("\nRELATED INCIDENTS", style="bold underline"))
-    if details.incidents:
-        for incident in details.incidents:
-            role = (
-                "rule match on this process"
-                if details.key in incident.process_keys
-                else ("context: ancestor of a matched process")
-            )
-            line = Text(f"- {incident.incident_id} ")
-            line.append_text(severity_text(incident.severity))
-            line.append(f"  {role}", style="dim")
-            sections.append(line)
-    else:
-        sections.append(Text("- none", style="dim"))
+        sections.append(
+            Text("\nSelect an action for ancestry, events, alerts, or incidents.", style="dim")
+        )
     return Panel(Group(*sections), title="PROCESS DETAILS", title_align="left")
+
+
+def render_process_events(details: ProcessDetails) -> RenderableType:
+    if not details.events:
+        return Text("No related events for this process in the current session.", style="dim")
+    return Panel(
+        event_table(details.events),
+        title="RELATED EVENTS (this session)",
+        title_align="left",
+    )
 
 
 def event_table(events: list[Event]) -> Table:

@@ -46,7 +46,6 @@ from runtime_engine.terminal.views import (
     interfaces_view,
     metrics_view,
     network_investigation,
-    network_view,
     process_view,
     security_view,
 )
@@ -295,14 +294,14 @@ class Inspector:
         while current is not None:
             details = process_details(self.source, current, self.liveness, self.started)
             if details is None:
-                self.say("That process identity is not in the session or the database.")
+                self.say("That process identity is not in this session.")
                 return
             self.console.print(process_view.render_process_details(details))
             self.console.print(process_view.render_actions())
             current = None
             while current is None:
-                choice = self.ask("Select action [1-6]: ")
-                if choice in ("", "6", "b", "q"):
+                choice = self.ask("Select action [1-7] (Enter/b returns): ")
+                if choice in ("", "7", "b", "q"):
                     return
                 if choice == "1":
                     parent = details.lineage[-2] if len(details.lineage) > 1 else None
@@ -337,6 +336,8 @@ class Inspector:
                     if answer:
                         self.open_incident(answer)
                         return
+                elif choice == "6":
+                    self.console.print(process_view.render_process_events(details))
                 else:
                     self.say("Unknown action.")
 
@@ -370,15 +371,19 @@ class Inspector:
             self.say(f"Unknown incident {clean(incident_id)}.")
             return
         active = (incident_id in self.state.active_incident_ids()) if self.state else None
-        details = incident_details(self.database, incident_id, self.rules, active)
+        since = self.state.info.started_at if self.state else None
+        session_id = self.state.info.session_id if self.state else None
+        details = incident_details(
+            self.database, incident_id, self.rules, active, since=since, session_id=session_id
+        )
         if details is None:
             self.say("The incident has not been persisted yet; try again in a moment.")
             return
         self.console.print(incident_view.render_incident_details(details))
         self.console.print(process_view.render_actions(incident_view.ACTIONS))
         while True:
-            choice = self.ask("Select action [1-5]: ")
-            if choice in ("", "5", "b", "q"):
+            choice = self.ask("Select action [1-6] (Enter/b returns): ")
+            if choice in ("", "6", "b", "q"):
                 return
             if choice == "1":
                 self.console.print(incident_view.render_related_events(details))
@@ -408,8 +413,10 @@ class Inspector:
                         self.show_process(key)
                         return
             elif choice == "3":
-                self.console.print(incident_view.render_evidence(details))
+                self.console.print(incident_view.render_why_flagged(details))
             elif choice == "4":
+                self.console.print(incident_view.render_evidence(details))
+            elif choice == "5":
                 self.export(incident_id, details.report)
             else:
                 self.say("Unknown action.")
@@ -447,45 +454,79 @@ class Inspector:
     # ----- process tree -----
 
     def process_tree_page(self) -> None:
-        """Open the process tree view."""
+        """List suspicious activity roots, then show ancestry for a selection."""
         from runtime_engine.terminal.dashboard import render_process_tree
 
-        tree = self.state.build_process_tree() if self.state else {}
-        selected_key = None
+        if self.state is None:
+            self.say("Process tree requires a live monitoring session.")
+            self.ask("Press Enter to return ")
+            return
 
-        # Root the view at a process with a rule match, if any.
-        if self.state:
-            for key in tree:
-                record = self.state.process(key)
-                if record is not None and record.severity is not None:
-                    selected_key = key
-                    break
-
-        if selected_key is None:
-            selected_key = next(iter(tree)) if tree else None
-
-        # Render the tree
-        try:
-            tree_render = render_process_tree(
-                self.state,
-                self.console.width,
-                self.console.height,
-                process_tree=tree,
-                selected_key=selected_key,
+        roots = self.state.suspicious_tree_roots()
+        if not roots:
+            self.console.print(
+                Text(
+                    "No suspicious process trees in this session.\n"
+                    "Only processes with rule matches appear here.",
+                    style="dim",
+                )
             )
-            self.console.print(tree_render)
-        except Exception as e:
-            self.say(f"Error rendering process tree: {e}")
+            self.ask("Press Enter to return to the dashboard ")
+            return
 
-        # Ask to go back
-        self.ask("Press Enter to return to the dashboard ")
+        table = Table(title="SUSPICIOUS ACTIVITY (select to view ancestry)", title_justify="left")
+        table.add_column("#", justify="right")
+        table.add_column("PID", justify="right")
+        table.add_column("PROCESS")
+        table.add_column("SEVERITY")
+        table.add_column("INCIDENTS")
+        for index, record in enumerate(roots, 1):
+            table.add_row(
+                str(index),
+                clean(record.event.pid),
+                clean(record.event.process_name, 24),
+                severity_text(record.severity),
+                ", ".join(record.incident_ids) or "-",
+            )
+        self.console.print(table)
+
+        while True:
+            answer = self.ask("Activity # or PID (blank/b returns to dashboard): ")
+            if not answer or answer.lower() in ("b", "q"):
+                return
+            selected_key: str | None = None
+            if answer.isdigit() and 1 <= int(answer) <= len(roots):
+                selected_key = roots[int(answer) - 1].key
+            else:
+                selected_key = self.choose_identity(answer)
+            if selected_key is None:
+                continue
+            tree = self.state.build_process_tree()
+            try:
+                self.console.print(
+                    render_process_tree(
+                        self.state,
+                        self.console.width,
+                        self.console.height,
+                        process_tree=tree,
+                        selected_key=selected_key,
+                        show_suspicious_only=False,
+                    )
+                )
+            except Exception as exc:
+                self.say(f"Error rendering process tree: {exc}")
+            again = self.ask("Enter for another activity, or 'b' to return to dashboard: ")
+            if again.lower() in ("b", "q"):
+                return
 
     def event_page(self) -> None:
         self.console.print(Text(event_view.FILTER_HELP, style="dim"))
         while True:
-            answer = self.ask("Filter (blank = all recent, 'q' to return): ")
-            if answer.lower() in ("q", "b"):
+            answer = self.ask("Filter (blank/b/q = dashboard, 'all' = newest events): ")
+            if not answer or answer.lower() in ("q", "b"):
                 return
+            if answer.lower() in ("all", "*", "recent"):
+                answer = ""
             try:
                 spec = parse_filter(answer, self.clock())
             except ValueError as exc:
@@ -505,19 +546,26 @@ class Inspector:
         )
         shown = matches[-limit:]
         while True:
-            pick = self.ask("Row # for full details, 'f' for a new filter, blank to return: ")
-            if not pick:
+            pick = self.ask(
+                "Row # for details, 'raw N' for JSON, 'f' new filter, blank/b to return: "
+            )
+            if not pick or pick.lower() in ("b", "q"):
                 return False
             if pick.lower() == "f":
                 return True
-            if pick.isdigit() and 1 <= int(pick) <= len(shown):
-                record = shown[int(pick) - 1]
+            raw = False
+            token = pick
+            if pick.lower().startswith("raw "):
+                raw = True
+                token = pick.split(None, 1)[1]
+            if token.isdigit() and 1 <= int(token) <= len(shown):
+                record = shown[int(token) - 1]
                 alerts = (
                     self.state.alerts_by_id(record.alert_ids)
                     if self.state
                     else self.database.alerts(list(record.alert_ids))
                 )
-                self.console.print(event_view.render_event_details(record, alerts))
+                self.console.print(event_view.render_event_details(record, alerts, raw=raw))
             else:
                 self.say("Unknown row.")
 
@@ -561,10 +609,11 @@ class Inspector:
         return ScanReport.from_dict(body) if body else None
 
     def network_investigation_page(self) -> None:
-        """Dedicated network investigation: attribution, detections, incidents, Atomic sessions."""
+        """Network-focused page: destinations, attribution, indicators; details on selection."""
         assert self.state is not None
         report = self._security_report("network")
-        connections = list((report.summary if report else {}).get("connections") or [])
+        summary = report.summary if report else {}
+        connections = list(summary.get("connections") or [])
         with self.state.lock:
             processes = {key: proc.copy() for key, proc in self.state.processes.items()}
             alerts = list(self.state.alerts.values())
@@ -583,25 +632,47 @@ class Inspector:
             findings=self._security_findings("network"),
             atomic_sessions=self.state.atomic_session_list(),
         )
-        self.console.print(interfaces_view.render_interfaces(report.summary if report else None))
+        iface_summary = None
+        interfaces = (summary.get("interfaces") or {}).get("interfaces") or []
+        if interfaces:
+            names = [
+                f"{i.get('name')}({i.get('state') or '?'})"
+                for i in interfaces[:4]
+                if isinstance(i, dict)
+            ]
+            route = (summary.get("interfaces") or {}).get("route") or {}
+            default = route.get("default_interface")
+            iface_summary = ", ".join(names)
+            if default:
+                iface_summary += f"  default={default}"
+            # Compact one-liner; full iface panel available via module page [6]→network.
+            self.console.print(
+                Text(f"Interfaces: {iface_summary}", style="dim")
+            )
+        else:
+            # Still show the interfaces panel when present so labs keep a clear empty state.
+            rendered = interfaces_view.render_interfaces(summary or None)
+            self.console.print(rendered)
+
         self.console.print(
             network_investigation.render_network_investigation(
-                report, rows, atomic_sessions=self.state.atomic_session_list()
+                report,
+                rows,
+                atomic_sessions=self.state.atomic_session_list(),
+                interface_summary=iface_summary,
             )
         )
-        # Keep the existing module page available for beacon/frequency detail.
-        if report is not None:
-            self.console.print(
-                network_view.render_network(
-                    report,
-                    self._security_findings("network"),
-                    incidents={
-                        key: [i.incident_id for i in incidents if key in i.process_keys]
-                        for key in processes
-                    },
+        while True:
+            answer = self.ask("Row # for connection details (blank/b returns to dashboard): ")
+            if not answer or answer.lower() in ("b", "q"):
+                return
+            if answer.isdigit() and 1 <= int(answer) <= len(rows):
+                detail = network_investigation.render_connection_detail(
+                    rows[int(answer) - 1]
                 )
-            )
-        self.ask("Press Enter to return to the dashboard ")
+                self.console.print(detail)
+            else:
+                self.say("Unknown row.")
 
     def atomic_sessions_page(self) -> None:
         """List live Atomic execution sessions registered with this monitor."""

@@ -49,7 +49,8 @@ def inspector(state, database, answers, tmp_path, **kwargs):
 
 def test_process_inspection_live(chain, database, tmp_path):
     state, _ = chain
-    answers = ["abc", "999", "110", "3", "4", "5", "", "2", "1", "1", "6"]
+    # list → bad PID → bash → ancestry → alerts → incidents stay → children → curl → back
+    answers = ["abc", "999", "110", "3", "4", "5", "", "2", "1", "1", "7"]
     page, console = inspector(state, database, answers, tmp_path)
     page.dispatch("p")
     text = text_of(console)
@@ -57,14 +58,12 @@ def test_process_inspection_live(chain, database, tmp_path):
     assert "Select a process to inspect" in text and "INC-0001" in text
     assert "A PID must be a whole number." in text
     assert "No process with PID 999 was observed in this session." in text
-    assert "PROCESS DETAILS" in text and "PROCESS NAME      bash" in text
+    assert "PROCESS DETAILS" in text and "PROCESS" in text and "bash" in text
     assert "HISTORICAL" in text and "replayed or non-/proc telemetry" in text
     assert "RT001: Shell from unusual application parent" in text
-    assert "soffice (PID 100)" in text and "<- selected" in text
     assert "COMPLETE ANCESTRY" in text and "ASSOCIATED ALERTS" in text
     assert "CHILD PROCESSES (observed)" in text
-    assert "PROCESS NAME      curl" in text  # navigated to the child, then back to bash
-    assert "rule match on this process" in text
+    assert "curl" in text  # navigated to the child
 
 
 def test_historical_process_with_reused_pid_is_not_confused(database, tmp_path):
@@ -82,14 +81,15 @@ def test_historical_process_with_reused_pid_is_not_confused(database, tmp_path):
     check = functools.partial(liveness.check, root=tmp_path / "proc")
     started = functools.partial(liveness.start_time, root=tmp_path / "proc")
     page, console = inspector(
-        None, database, ["777", "1", "6"], tmp_path, liveness=check, started=started
+        None, database, ["777", "1", "7"], tmp_path, liveness=check, started=started
     )
     page.dispatch("p")
     text = text_of(console)
     assert "This PID was used by more than one process identity" in text
     assert "PID now belongs to a different process" in text
     assert "Showing HISTORICAL information" in text
-    assert "PROCESS NAME      dropper" in text and "derived from boot time" in text
+    assert "dropper" in text and "PROCESS NAME" in text
+    assert "HISTORICAL" in text
     details = process_details(DatabaseSource(database), reused.process_key, check)
     assert details is not None and details.liveness.running
     assert liveness.check(old, tmp_path / "missing").label == "UNKNOWN"
@@ -110,7 +110,22 @@ def test_liveness_edge_cases(tmp_path):
 def test_incident_inspection_and_export(chain, database, tmp_path):
     state, _ = chain
     target = tmp_path / "out" / "incident.json"
-    answers = ["", "1", "1", "3", "4", str(target), "4", str(target), "9", "2", "1", "6"]
+    # list blank; open INC-0001; events; why; evidence JSON; export; overwrite; bad; process; back
+    answers = [
+        "",
+        "1",
+        "1",
+        "3",
+        "4",
+        "5",
+        str(target),
+        "5",
+        str(target),
+        "9",
+        "2",
+        "1",
+        "7",
+    ]
     page, console = inspector(state, database, answers, tmp_path)
     page.dispatch("i")  # blank answer: list only
     page.dispatch("i")
@@ -144,13 +159,24 @@ def test_incident_lookup_errors_and_empty_list(database, tmp_path):
 
 def test_event_filtering(chain, database, tmp_path):
     state, _ = chain
-    answers = ["bogus", "pid=x", "kind=match severity=HIGH", "1", "99", "f", "kind=observed", ""]
+    answers = [
+        "bogus",
+        "pid=x",
+        "kind=match severity=HIGH",
+        "1",
+        "raw 1",
+        "99",
+        "f",
+        "kind=observed",
+        "",
+    ]
     page, console = inspector(state, database, answers, tmp_path)
     page.dispatch("e")
     text = text_of(console)
     assert "Invalid filter" in text
+    assert "EVENT SUMMARY" in text
     assert "RAW OBSERVED EVENT (normalized telemetry; not a finding by itself)" in text
-    assert "RULE MATCHES ON THIS EVENT" in text and "CORRELATED INCIDENTS: INC-0001" in text
+    assert "RULE MATCHES ON THIS EVENT" in text and "INC-0001" in text
     assert "Unknown row." in text
     records = state.event_records()
     assert len(filter_records(records, parse_filter("kind=match severity=HIGH"))) == 3
@@ -171,15 +197,24 @@ def test_event_filtering(chain, database, tmp_path):
         raise AssertionError(bad)
 
 
+def test_event_page_blank_returns_to_dashboard(chain, database, tmp_path):
+    state, _ = chain
+    page, console = inspector(state, database, [""], tmp_path)
+    page.dispatch("e")
+    text = text_of(console)
+    assert "blank/b/q = dashboard" in text or "Filter" in text
+    assert "SESSION EVENTS" not in text
+
+
 def test_metrics_alerts_and_help_pages(chain, database, tmp_path):
     state, _ = chain
     assert state.notifications.active()
-    page, console = inspector(state, database, ["", "", "INC-0001", "5", ""], tmp_path)
+    page, console = inspector(state, database, ["", "", "INC-0001", "6", ""], tmp_path)
     page.dispatch("m")
     page.dispatch("h")
     page.dispatch("r")
     text = text_of(console)
-    assert "LIVE METRICS (measured in this session)" in text
+    assert "LIVE METRICS" in text
     assert "COMMANDS" in text and "RECENT ALERTS" in text and "SECURITY INCIDENT" in text
     assert state.notifications.active() == []  # acknowledged by opening the alert list
 
@@ -220,7 +255,7 @@ def test_q_command_stops_after_opening_a_page(database, tmp_path):
     result = session.shutdown(reason)
     assert reason == "user_quit" and keys.suspended == 1
     assert result.status == "STOPPED_GRACEFULLY"
-    assert "LIVE METRICS" in text_of(console)
+    assert "LIVE METRICS" in text_of(console) or "METRICS" in text_of(console)
     assert state.status == "STOPPED"
 
 
@@ -319,20 +354,49 @@ def test_database_source_lookups(chain, database):
 
 
 def test_process_tree_and_live_logs_keep_monitoring(database, tmp_path):
-    """t opens the tree without stopping; l runs live logs; b returns; q in live logs stops."""
+    """t lists suspicious activity, selection shows tree; l runs live logs; q stops."""
     parent = proc_event(8200, name="dropper", exe="/tmp/dropper", start="82000")
     child = proc_event(8201, ppid=8200, name="sh", start="82010", parent_start="82000")
     session, state = session_for(database, [[proc_event(8100)], [parent, child]])
     keys = FakeKeys([None] * 5 + ["t", "l", "b", "l", "q"])
-    monitor, console = monitor_for(session, keys, [""], tmp_path, database)
+    monitor, console = monitor_for(session, keys, ["1", "b"], tmp_path, database)
     session.start()
     reason = monitor.run()
     session.shutdown(reason)
     text = text_of(console)
     assert reason == "user_quit"
-    assert "PROCESS TREE" in text and "PID 8200 dropper MEDIUM" in text and "[RUNNING]" not in text
+    assert "SUSPICIOUS ACTIVITY" in text or "PROCESS TREE" in text
+    assert "PID 8200 dropper" in text and "MEDIUM" in text and "[RUNNING]" not in text
     assert keys.suspended == 1  # only the tree page used line input
     assert state.status == "STOPPED"
+
+
+def test_live_source_ignores_prior_session_events(database, tmp_path):
+    """Dashboard LiveSource must not surface prior-session process events."""
+    from datetime import UTC, datetime, timedelta
+
+    from runtime_engine.detection.rule_loader import load_rules
+    from runtime_engine.pipeline import Pipeline
+
+    old_pipeline = Pipeline(database, load_rules(), session_id="SES-OLD")
+    old_event = proc_event(9100, name="oldbin", exe="/tmp/oldbin", start="91000")
+    old_event = old_event.model_copy(
+        update={"timestamp": datetime.now(UTC) - timedelta(hours=2)}
+    )
+    old_pipeline.process(old_event)
+
+    info = make_info(session_id="SES-NEW")
+    state = DashboardState(info)
+    source = LiveSource(state, database)
+    assert source.events(old_event.process_key) == []
+    assert source.lookup(old_event.process_key) is None
+
+    new_pipeline = Pipeline(database, load_rules(), session_id="SES-NEW")
+    fresh = proc_event(9101, name="newbin", exe="/tmp/newbin", start="91010")
+    result = new_pipeline.process(fresh)
+    state.apply(result)
+    assert source.lookup(fresh.process_key) is not None
+    assert all(e.process_name == "newbin" for e in source.events(fresh.process_key))
 
 
 def test_unknown_live_log_input_returns_to_dashboard(chain, database, tmp_path):

@@ -16,11 +16,12 @@ from runtime_engine.process.ancestry import parent_key
 from runtime_engine.terminal.formatting import clean, severity_text, timestamp
 
 ACTIONS = (
-    ("1", "View all related events"),
+    ("1", "View related events"),
     ("2", "View process details"),
-    ("3", "View complete evidence"),
-    ("4", "Export JSON report"),
-    ("5", "Return to dashboard"),
+    ("3", "View why flagged"),
+    ("4", "View complete evidence JSON"),
+    ("5", "Export JSON report"),
+    ("6", "Return to dashboard"),
 )
 NOT_CONFIRMED = (
     "An incident groups rule matches for human review. It does not confirm that a "
@@ -152,6 +153,7 @@ def why_flagged(details: IncidentDetails) -> RenderableType:
 
 
 def render_incident_details(details: IncidentDetails) -> RenderableType:
+    """Compact summary. Timeline, why-flagged, and full JSON open via actions."""
     incident, report = details.incident, details.report
     window = (
         "unknown (historical view)"
@@ -165,7 +167,7 @@ def render_incident_details(details: IncidentDetails) -> RenderableType:
     grid.add_column(overflow="fold")
     grid.add_row("TITLE", clean(incident.title))
     grid.add_row("SEVERITY", severity_text(incident.severity))
-    grid.add_row("STATUS", f"{incident.status} (awaiting review); correlation window {window}")
+    grid.add_row("STATUS", f"{incident.status}; window {window}")
     grid.add_row("FIRST OBSERVED", timestamp(incident.first_seen))
     grid.add_row("LAST OBSERVED", timestamp(incident.last_seen))
     grid.add_row(
@@ -173,46 +175,38 @@ def render_incident_details(details: IncidentDetails) -> RenderableType:
         f"{incident.event_count} matched event(s), {len(incident.alert_ids)} alert(s), "
         f"{len(report['context_events'])} context event(s)",
     )
-    processes = Text()
+    grid.add_row("RULES", ", ".join(incident.rule_ids) or "-")
     matched = set(incident.process_keys)
-    for event in details.processes:
+    processes = Text()
+    for event in details.processes[:8]:
         processes.append(
             f"- {clean(event.process_name, 32)} PID {event.pid}"
             f"{'  [rule match]' if event.process_key in matched else '  [context]'}\n"
         )
-    rules = Text()
-    for rule_id in incident.rule_ids:
-        rule = details.rules.get(rule_id)
-        rules.append(f"- {rule_id}{': ' + clean(rule.name) if rule else ''}\n")
-    timeline = Table(box=None, padding=(0, 1), show_edge=False)
-    timeline.add_column("TIME", no_wrap=True)
-    timeline.add_column("EVENT TYPE", no_wrap=True)
-    timeline.add_column("PID", justify="right")
-    timeline.add_column("RULES MATCHED")
-    for item in report["evidence_timeline"]:
-        timeline.add_row(
-            timestamp(item["timestamp"]),
-            clean(item["event_type"]),
-            clean(item["pid"]),
-            _rules_for_event(details, item["event_id"]),
-        )
+    if len(details.processes) > 8:
+        processes.append(f"  +{len(details.processes) - 8} more (action 2)\n", style="dim")
     return Panel(
         Group(
             grid,
             Text("\nRELATED PROCESSES", style="bold underline"),
             processes if details.processes else Text("- none recorded", style="dim"),
-            Text("DETECTION RULES", style="bold underline"),
-            rules,
-            Text("EVIDENCE TIMELINE (rule-matched events)", style="bold underline"),
-            timeline,
             Text("\nPROCESS TREE", style="bold underline"),
             process_tree(details),
-            Text("\nWHY WAS THIS FLAGGED?", style="bold underline"),
-            why_flagged(details),
+            Text(f"\n{NOT_CONFIRMED}", style="italic dim"),
+            Text("Select an action for events, why-flagged detail, or export.", style="dim"),
         ),
         title=f"SECURITY INCIDENT: {incident.incident_id}",
         title_align="left",
         border_style="red",
+    )
+
+
+def render_why_flagged(details: IncidentDetails) -> RenderableType:
+    return Panel(
+        why_flagged(details),
+        title="WHY WAS THIS FLAGGED?",
+        title_align="left",
+        border_style="yellow",
     )
 
 

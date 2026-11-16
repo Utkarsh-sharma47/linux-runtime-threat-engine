@@ -19,7 +19,8 @@ from runtime_engine.terminal.formatting import (
 )
 
 FILTER_HELP = (
-    "Filters (space separated key=value, all must match):\n"
+    "Filters (space-separated key=value). Blank / b / q returns to the dashboard.\n"
+    "  all                 show newest session events\n"
     "  pid=1234  name=bash  type=PROCESS_START|FILE_ACCESS|NETWORK_CONNECTION|...\n"
     "  severity=MEDIUM (at least)  since=10m|30s|2h|14:05|ISO  until=...  incident=INC-0001\n"
     "  kind=observed (no rule match) | match (rule matched) | incident (correlated)"
@@ -56,7 +57,7 @@ def render_event_table(
     """Narrow terminals drop the free-text DETAIL column instead of crushing identifiers."""
     shown = records[-limit:]
     caption = (
-        f"{len(records)} matching of {total} event(s) searched; showing the newest "
+        f"{len(records)} matching of {total} event(s) in this session; showing the newest "
         f"{len(shown)}. Filter: {clean(spec.describe())}"
     )
     if not shown:
@@ -91,13 +92,26 @@ def render_event_table(
     return table
 
 
-def render_event_details(record: EventRecord, alerts: list[Alert]) -> RenderableType:
+def render_event_details(
+    record: EventRecord, alerts: list[Alert], *, raw: bool = False
+) -> RenderableType:
     event = record.event
-    raw = Panel(
-        Text(export_json(event.model_dump(mode="json"))),
-        title="RAW OBSERVED EVENT (normalized telemetry; not a finding by itself)",
-        title_align="left",
-    )
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold", no_wrap=True)
+    grid.add_column(overflow="fold")
+    for label, value in (
+        ("TYPE", event.event_type.value),
+        ("TIME", timestamp(event.timestamp)),
+        ("PID", clean(event.pid)),
+        ("PROCESS", clean(event.process_name)),
+        ("DETAIL", detail(event, None)),
+        ("CATEGORY", kind(record).plain),
+        ("INCIDENTS", ", ".join(record.incident_ids) or "none"),
+    ):
+        grid.add_row(label, value)
+    parts: list[RenderableType] = [
+        Panel(grid, title="EVENT SUMMARY", title_align="left"),
+    ]
     if alerts:
         matches = Table(title="RULE MATCHES ON THIS EVENT", title_justify="left")
         matches.add_column("RULE")
@@ -111,17 +125,24 @@ def render_event_details(record: EventRecord, alerts: list[Alert]) -> Renderable
                 severity_text(alert.severity),
                 clean(alert.reason),
             )
-        rule_part: RenderableType = matches
+        parts.append(matches)
     else:
-        rule_part = Text("RULE MATCHES ON THIS EVENT: none", style="dim")
-    incidents = Text(
-        "CORRELATED INCIDENTS: "
-        + (", ".join(record.incident_ids) if record.incident_ids else "none"),
-        style="bold" if record.incident_ids else "dim",
+        parts.append(Text("RULE MATCHES ON THIS EVENT: none", style="dim"))
+    if raw:
+        parts.append(
+            Panel(
+                Text(export_json(event.model_dump(mode="json"))),
+                title="RAW OBSERVED EVENT (normalized telemetry; not a finding by itself)",
+                title_align="left",
+            )
+        )
+    else:
+        parts.append(Text("Enter 'raw' on the next prompt to dump full JSON.", style="dim"))
+    parts.append(
+        Text(
+            f"Event time: {timestamp(event.timestamp)}   Engine processed: "
+            f"{timestamp(record.received_at)}",
+            style="dim",
+        )
     )
-    received = Text(
-        f"Event time: {timestamp(event.timestamp)}   Engine processed: "
-        f"{timestamp(record.received_at)}",
-        style="dim",
-    )
-    return Group(raw, rule_part, incidents, received)
+    return Group(*parts)

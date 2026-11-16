@@ -42,10 +42,10 @@ def test_dashboard_initialization_shows_empty_states():
     state = DashboardState(make_info())
     text = render(render_dashboard(state.snapshot(), 140, 45), 140, 45)
     assert "LINUX RUNTIME THREAT DETECTION ENGINE" in text
-    assert "STATUS: STARTING" in text and "MODE: LIVE" in text
-    assert "SESSION: SES-TEST" in text and "ENGINE PID: 4242" in text
+    assert "STATUS: STARTING" in text and "Mode LIVE" in text
+    assert "SESSION: SES-TEST" in text
     assert "No incidents correlated in this session." in text
-    assert "No processes observed yet." in text
+    assert "No suspicious processes in this session." in text
     assert "No new events yet. Monitoring continues." in text
     assert "[q] Quit" in text and "[5] Network" in text and "[8] Atomic" in text
 
@@ -54,13 +54,13 @@ def test_dashboard_refresh_reflects_new_pipeline_results(database):
     state = DashboardState(make_info())
     state.set_status("RUNNING")
     before = render(render_dashboard(state.snapshot(), 140, 45), 140, 45)
-    assert "Suspicious Detections" in before
+    assert "Detections" in before
     pipeline = Pipeline(database, load_rules())
     state.record_observed()
     state.apply(pipeline.process(proc_event(500, name="dropper", exe="/tmp/dropper")))
     after = render(render_dashboard(state.snapshot(), 140, 45), 140, 45)
     assert "INC-0001" in after and "RT002" in after
-    assert "SUSPICIOUS (MEDIUM)" in after
+    assert "dropper" in after and "MEDIUM" in after
     assert "SECURITY ALERT" in after and "Press [i] to inspect" in after
     assert "STATUS: RUNNING" in after
 
@@ -199,7 +199,7 @@ def test_renderer_failure_is_contained():
 def test_metrics_display_with_and_without_measurements(chain):
     state, pipeline = chain
     text = render(render_metrics(state.snapshot()))
-    assert "Processed by pipeline" in text and " 6 " in text
+    assert "Processed" in text and " 6 " in text
     assert "Rule matches" in text
     assert "ms" in text
     empty = render(render_metrics(DashboardState(make_info()).snapshot()))

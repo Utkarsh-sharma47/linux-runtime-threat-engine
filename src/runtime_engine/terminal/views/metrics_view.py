@@ -22,59 +22,37 @@ from runtime_engine.terminal.formatting import (
 def render_metrics(snap: DashboardSnapshot) -> RenderableType:
     c, latency = snap.counters, snap.latency
     elapsed = (snap.now - snap.info.started_at).total_seconds()
-    pipeline_rate = (
-        c.processed / ((latency.average_ms or 0) * latency.samples / 1000)
-        if latency.samples and latency.average_ms
-        else None
-    )
-    table = Table(title="LIVE METRICS (measured in this session)", title_justify="left")
+    table = Table(title="LIVE METRICS (this session)", title_justify="left")
     table.add_column("GROUP", style="bold")
     table.add_column("METRIC")
     table.add_column("VALUE", justify="right")
     rows = [
+        ("Session", "Session ID", snap.info.session_id),
         ("Session", "Duration", duration(elapsed)),
-        ("Session", "Polls completed", number(c.polls)),
-        ("Session", "Baseline processes (first poll)", number(c.baseline_processes)),
-        ("Events", "Observed by collector", number(c.observed)),
-        ("Events", "Accepted into queue", number(c.accepted)),
-        ("Events", "Processed by pipeline", number(c.processed)),
-        ("Events", "Duplicate events ignored", number(c.duplicate_events)),
-        ("Events", "Rejected", number(c.rejected)),
+        ("Session", "Polls", number(c.polls)),
+        ("Events", "Processed", number(c.processed)),
         ("Events", "Dropped", number(c.dropped)),
         ("Queue", "Depth / capacity", f"{c.queue_depth} / {number(snap.info.queue_capacity)}"),
         ("Queue", "Peak depth", number(c.queue_peak)),
-        ("Queue", "Backpressure waits (collector blocked)", number(c.backpressure_waits)),
         ("Detection", "Rule matches", number(c.rule_matches)),
         ("Detection", "Unique alerts", number(snap.unique_alerts)),
-        ("Detection", "Duplicate matches suppressed", number(c.duplicate_matches)),
         (
             "Detection",
             "Incidents (active)",
             f"{len(snap.incidents)} ({len(snap.active_incident_ids)})",
         ),
-        ("Collector", "Errors (total)", number(c.collector_errors)),
-        ("Collector", "Unreadable optional fields", number(c.missing_telemetry)),
-        ("Collector", "Entries skipped (read failed)", number(c.read_failures)),
-        ("Latency", "Average per event", milliseconds(latency.average_ms)),
-        ("Latency", "P95 per event", milliseconds(latency.p95_ms)),
-        ("Latency", "Maximum per event", milliseconds(latency.max_ms)),
-        ("Throughput", "Pipeline events/s (busy time)", number(pipeline_rate)),
-        (
-            "Throughput",
-            "Session events/s (wall time)",
-            number(c.processed / elapsed if elapsed > 0 else None),
-        ),
-        ("Resources", "Memory", memory(snap.peak_rss_kb)),
-        ("Display", "Render errors", number(c.render_errors)),
-        ("Display", "Log entries evicted from view buffer", number(c.logs_evicted)),
-        ("Display", "Event records evicted from view buffer", number(c.events_evicted)),
+        ("Health", "Collector errors", number(c.collector_errors)),
+        ("Health", "Read failures", number(c.read_failures)),
+        ("Health", "Avg latency / event", milliseconds(latency.average_ms)),
+        ("Health", "P95 latency / event", milliseconds(latency.p95_ms)),
+        ("Health", "Memory (peak RSS)", memory(snap.peak_rss_kb)),
+        ("Health", "Render errors", number(c.render_errors)),
     ]
     for group, metric, value in rows:
         table.add_row(group, metric, value)
     note = Text(
-        "Latency covers the pipeline (rules, correlation, SQLite) per event, not /proc reads.\n"
-        "Evicted view-buffer entries remain in SQLite; rule matches and incidents are never "
-        "evicted.",
+        "Metrics cover the current monitoring session only. "
+        "Historical session summaries remain available via the session CLI.",
         style="dim",
     )
     return Group(table, note)
@@ -124,15 +102,15 @@ def render_help(telemetry: str) -> RenderableType:
     commands.add_column()
     for key, text in (
         ("1 / h", "Help"),
-        ("2 / l", "Live event log (scrolls; b returns)"),
-        ("3 / p", "Processes: identity, rules, events, ancestry, children"),
-        ("4 / t", "Process ancestry tree"),
-        ("5 / n", "Host interfaces (RX/TX), connections, attribution, Atomic links"),
-        ("6 / s", "Security modules (all six investigation pages)"),
-        ("7 / i", "Incidents: evidence timeline and correlated rules"),
+        ("2 / l", "Live event log (b returns)"),
+        ("3 / p", "Suspicious processes (details on selection)"),
+        ("4 / t", "Suspicious activity / process ancestry"),
+        ("5 / n", "Network destinations, ports, attribution, indicators"),
+        ("6 / s", "Security modules (status + details on open)"),
+        ("7 / i", "Incidents (summary; evidence on selection)"),
         ("8 / a", "Atomic / lab execution sessions"),
-        ("9 / m", "Metrics: queue, latency, collector errors, memory"),
-        ("e", "Event filters (pid, name, type, severity, time, incident)"),
+        ("9 / m", "Session metrics / health"),
+        ("e", "Event filters (blank returns; 'all' shows newest)"),
         ("r", "Alerts (clears pinned notifications)"),
         ("q", "Stop monitoring gracefully and print the session report"),
         ("Ctrl+C", "Same as q. A second Ctrl+C during shutdown forces the stop."),
