@@ -124,6 +124,13 @@ class ExposureSettings(ModuleSettings):
     """Attack surface and exposure analysis; see docs/security/EXPOSURE.md."""
 
     interval_seconds: float = Field(default=900, ge=10, le=86400)
+    # Host-wide posture checks. Lab demos turn these off so ambient laptop services
+    # and unrelated /tmp apps (browsers, GitHub Desktop, etc.) do not create incidents.
+    scan_services: bool = True
+    scan_processes: bool = True
+    scan_sudo: bool = True
+    scan_sensitive: bool = True
+    scan_path_dirs: bool = True
     suid_paths: list[str] = Field(
         default_factory=lambda: [
             "/usr/bin",

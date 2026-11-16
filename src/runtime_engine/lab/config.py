@@ -62,6 +62,13 @@ def lab_monitor_settings(session: Path, *, ransomware_dir: Path | None = None) -
                 "suid_max_depth": 2,
                 "expected_suid": [],  # any SUID in the lab is unexpected by design
                 "expected_listen_ports": [22, 53, 631, 8765],
+                # Do not scan the real laptop's listeners, /tmp apps, sudoers, or PATH.
+                # Lab SUID findings still come from privileged_files on lab paths above.
+                "scan_services": False,
+                "scan_processes": False,
+                "scan_sudo": False,
+                "scan_sensitive": False,
+                "scan_path_dirs": False,
             },
             "ransomware": {
                 "enabled": True,

@@ -17,6 +17,7 @@ from runtime_engine.lab.paths import (
     set_active_session,
     status_path,
 )
+from runtime_engine.lab.rules import write_lab_rules
 from runtime_engine.lab.status import LabStatus, now_iso, write_status
 from runtime_engine.security import ransomware_sim
 
@@ -38,6 +39,7 @@ def prepare_session(
     ransom = ransomware_lab_path(sid)
     ransomware_sim.create_lab(str(ransom))
     config = write_monitor_config(session, session / "monitor.yaml", ransomware_dir=ransom)
+    write_lab_rules(session, session / "lab-rules.yaml", ransomware_dir=ransom)
     set_active_session(session)
     status = LabStatus(
         session_id=sid,

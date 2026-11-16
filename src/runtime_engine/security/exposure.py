@@ -575,14 +575,17 @@ class ExposureAnalyzer:
         coverage = Coverage()
         full = full or self.scans % self.settings.full_scan_every == 0
         self.scans += 1
-        checks = (
-            self.privileged_files(coverage, full)
-            + self.path_dirs()
-            + self.sensitive_files(coverage)
-            + self.services(coverage)
-            + self.processes(coverage)
-            + self.sudo(coverage)
-        )
+        checks = self.privileged_files(coverage, full)
+        if self.settings.scan_path_dirs:
+            checks += self.path_dirs()
+        if self.settings.scan_sensitive:
+            checks += self.sensitive_files(coverage)
+        if self.settings.scan_services:
+            checks += self.services(coverage)
+        if self.settings.scan_processes:
+            checks += self.processes(coverage)
+        if self.settings.scan_sudo:
+            checks += self.sudo(coverage)
         weights = self.settings.weights
         raw = [
             Finding.create(

@@ -23,8 +23,10 @@ def main(argv: list[str] | None = None) -> int:
 
         session, config, ransom, status = prepare_session(repo_root=Path.cwd())
         exports = env_exports(session, config)
+        rules = session / "lab-rules.yaml"
         print(f"session={session}")
         print(f"config={config}")
+        print(f"rules={rules}")
         print(f"ransomware_lab={ransom}")
         print(f"database={status.database}")
         for key, value in exports.items():

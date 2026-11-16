@@ -80,6 +80,14 @@ def test_prepare_session_writes_config_and_status(isolated_lab):
     assert "include_loopback: true" in text
     assert str(session / "cron") in text
     assert ransom.name.startswith("rte-ransomware-lab")
+    # Ambient host scanners must stay off in the lab YAML.
+    assert "scan_services: false" in text
+    assert "scan_processes: false" in text
+    rules = session / "lab-rules.yaml"
+    assert rules.is_file()
+    body = rules.read_text(encoding="utf-8")
+    assert "rte-security-lab" in body
+    assert "/dev/shm" not in body.split("RT002", 1)[1].split("RT003", 1)[0]
 
 
 def test_dry_run_orchestration(isolated_lab, capsys):
